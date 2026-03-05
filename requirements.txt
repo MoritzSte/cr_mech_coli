@@ -5,3 +5,5 @@ tqdm>=4.60
 scikit-image>=0.24
 pytest>=8.0
 matplotlib
+scipy
+tifffile

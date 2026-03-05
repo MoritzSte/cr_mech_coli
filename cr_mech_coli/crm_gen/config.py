@@ -6,12 +6,7 @@ Provides functions for loading and managing TOML configuration files.
 
 from pathlib import Path
 from typing import Dict, Any
-
-# TOML support (Python 3.11+ has tomllib built-in)
-try:
-    import tomllib
-except ModuleNotFoundError:
-    import tomli as tomllib
+import tomllib
 
 
 def get_default_config_path() -> Path:
