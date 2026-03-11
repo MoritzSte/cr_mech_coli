@@ -4,6 +4,7 @@
 # The input directory of real microscope images is passed as a CLI argument.
 
 [optimization]
+imaging_mode = "phase_contrast"         # Imaging mode: "phase_contrast" or "fluorescence"
 output_dir = ""                         # Output directory (empty = ./fit_results_<timestamp>)
 limit = 0                               # Maximum number of images to use (0 = all)
 n_vertices = 8                          # Number of vertices per cell for shape extraction
