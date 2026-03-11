@@ -41,8 +41,8 @@ from .config import (
     get_default_config,
     get_default_config_path,
     PARAM_NAMES,
-    DEFAULT_OPTIMIZATION_BOUNDS,
-    DEFAULT_METRIC_WEIGHTS,
+    DEFAULT_BOUNDS,
+    DEFAULT_WEIGHTS,
     DEFAULT_REGION_WEIGHTS,
 )
 
