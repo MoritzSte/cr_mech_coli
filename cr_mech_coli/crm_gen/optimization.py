@@ -39,32 +39,7 @@ import tifffile as tiff
 
 from .scene import create_synthetic_scene
 from .metrics import compute_all_metrics, load_image
-
-# ============================================================================
-# Constants
-# ============================================================================
-
-DEFAULT_BOUNDS = [
-    (0.2, 0.6),  # bg_base_brightness
-    (0.0, 0.04),  # bg_gradient_strength; Default: (0.0, 0.02)
-    (0.01, 0.6),  # bac_halo_intensity
-    (1, 25),  # bg_noise_scale (background illumination noise scale)
-    (0.1, 3.0),  # psf_sigma (optical blur)
-    (1, 10000),  # peak_signal (Poisson noise, higher = less noise)
-    (0.001, 0.05),  # gaussian_sigma (readout noise)
-]
-
-PARAM_NAMES = [
-    "bg_base_brightness",
-    "bg_gradient_strength",
-    "bac_halo_intensity",
-    "bg_noise_scale",
-    "psf_sigma",
-    "peak_signal",
-    "gaussian_sigma",
-]
-
-DEFAULT_WEIGHTS = {"histogram_distance": 0.01, "ssim": 1.0, "psnr": 0.02}
+from .config import get_active_param_config, DEFAULT_BOUNDS, PARAM_NAMES, DEFAULT_WEIGHTS
 
 # ============================================================================
 # Checkpoint Manager for Differential Evolution
@@ -237,7 +212,8 @@ class ObjectiveFunction:
     that can be serialized for multiprocessing.
     """
 
-    def __init__(self, image_pairs, weights, temp_base_dir, n_vertices, region_weights):
+    def __init__(self, image_pairs, weights, temp_base_dir, n_vertices, region_weights,
+                 imaging_mode="phase_contrast"):
         """
         Initialize the objective function.
 
@@ -247,21 +223,27 @@ class ObjectiveFunction:
             temp_base_dir: Base directory for temporary worker files.
             n_vertices (int): Number of vertices for cell shape extraction.
             region_weights (dict): Weights for background and foreground regions.
+            imaging_mode (str): Either ``"phase_contrast"`` or ``"fluorescence"``.
+                Determines which parameters are optimized and which are fixed.
         """
         self.image_pairs = [(str(img), str(mask)) for img, mask in image_pairs]
         self.weights = weights
         self.temp_base_dir = str(temp_base_dir)
         self.n_vertices = n_vertices
         self.region_weights = region_weights
+        self.imaging_mode = imaging_mode
+        active_names, _, fixed = get_active_param_config(imaging_mode)
+        self.active_param_names = active_names
+        self.fixed_params = fixed
 
     def __call__(self, params):
         """
         Evaluate the objective function for a given parameter vector.
 
         Args:
-            params: Parameter vector [bg_base_brightness, bg_gradient_strength,
-                bac_halo_intensity, bg_noise_scale, psf_sigma, peak_signal,
-                gaussian_sigma].
+            params: Active parameter vector. For ``"phase_contrast"`` this is all
+                7 parameters; for ``"fluorescence"`` it is 5 (excluding
+                ``bg_gradient_strength`` and ``bac_halo_intensity``).
 
         Returns:
             float: Average loss across all image pairs. Returns 1e10 on error.
@@ -270,6 +252,10 @@ class ObjectiveFunction:
             worker_id = os.getpid()
             temp_dir = Path(self.temp_base_dir) / f"worker_{worker_id}"
             temp_dir.mkdir(exist_ok=True)
+
+            # Reconstruct the full named parameter dict, inserting fixed values.
+            param_dict = dict(zip(self.active_param_names, params))
+            param_dict.update(self.fixed_params)
 
             total_loss = 0
             for real_img_path_str, mask_path_str in self.image_pairs:
@@ -281,13 +267,14 @@ class ObjectiveFunction:
                     segmentation_mask_path=mask_path,
                     output_dir=temp_dir,
                     n_vertices=self.n_vertices,
-                    bg_base_brightness=params[0],
-                    bg_gradient_strength=params[1],
-                    bac_halo_intensity=params[2],
-                    bg_noise_scale=int(params[3]),
-                    psf_sigma=params[4],
-                    peak_signal=params[5],
-                    gaussian_sigma=params[6],
+                    bg_base_brightness=param_dict["bg_base_brightness"],
+                    bg_gradient_strength=param_dict["bg_gradient_strength"],
+                    bac_halo_intensity=param_dict["bac_halo_intensity"],
+                    bg_noise_scale=int(param_dict["bg_noise_scale"]),
+                    psf_sigma=param_dict["psf_sigma"],
+                    peak_signal=param_dict["peak_signal"],
+                    gaussian_sigma=param_dict["gaussian_sigma"],
+                    imaging_mode=self.imaging_mode,
                 )
 
                 if synthetic_img.dtype == np.uint8:
@@ -492,6 +479,7 @@ def optimize_parameters(
     n_vertices: int = 8,
     resume: bool = False,
     no_checkpoint: bool = False,
+    imaging_mode: str = "phase_contrast",
 ) -> Dict:
     """
     Optimize synthetic image parameters using differential evolution.
@@ -499,9 +487,12 @@ def optimize_parameters(
     Minimizes a weighted loss combining histogram distance, SSIM, and PSNR
     across all image pairs. Supports checkpointing and resuming.
 
+    For ``"fluorescence"`` mode, ``bg_gradient_strength`` and
+    ``bac_halo_intensity`` are excluded from optimization and fixed at 0.
+
     Args:
         image_pairs (List[Tuple[Path, Path]]): List of (image_path, mask_path) tuples.
-        bounds (List[Tuple[float, float]]): Parameter bounds for each dimension.
+        bounds (List[Tuple[float, float]]): Parameter bounds for each active dimension.
         weights (Dict): Metric weights for loss computation.
         region_weights (Dict): Weights for background and foreground regions.
         maxiter (int): Maximum number of iterations.
@@ -511,18 +502,29 @@ def optimize_parameters(
         n_vertices (int): Number of vertices for cell shape extraction.
         resume (bool): If True, resume from latest checkpoint.
         no_checkpoint (bool): If True, disable checkpointing.
+        imaging_mode (str): Either ``"phase_contrast"`` or ``"fluorescence"``.
 
     Returns:
         Dict: Optimization results including 'parameters', 'optimization_info',
-            'bounds', and 'weights'.
+            'bounds', 'weights', and 'imaging_mode'.
     """
+    active_names, active_bounds, fixed_params = get_active_param_config(imaging_mode)
+    # Allow caller-supplied bounds to override the defaults for active params
+    if bounds:
+        active_bounds = bounds
+
     print("\n" + "=" * 80)
     print("STARTING PARAMETER OPTIMIZATION")
     print("=" * 80)
+    print(f"Imaging mode: {imaging_mode}")
     print(f"Number of images: {len(image_pairs)}")
     print("Parameter bounds:")
-    for name, (low, high) in zip(PARAM_NAMES, bounds):
+    for name, (low, high) in zip(active_names, active_bounds):
         print(f"  {name}: [{low}, {high}]")
+    if fixed_params:
+        print("Fixed parameters:")
+        for name, val in fixed_params.items():
+            print(f"  {name}: {val} (fixed)")
     print("Metric weights:")
     for key, value in weights.items():
         print(f"  {key}: {value}")
@@ -545,6 +547,7 @@ def optimize_parameters(
             temp_base_dir=temp_base_dir,
             n_vertices=n_vertices,
             region_weights=region_weights,
+            imaging_mode=imaging_mode,
         )
 
         checkpoint_dir = Path("./checkpoints")
@@ -558,7 +561,7 @@ def optimize_parameters(
             checkpoint = checkpoint_mgr.load_checkpoint()
             if checkpoint:
                 config = {
-                    "bounds": bounds,
+                    "bounds": active_bounds,
                     "popsize": popsize,
                 }
                 if checkpoint_mgr.validate_checkpoint(checkpoint, config):
@@ -606,7 +609,7 @@ def optimize_parameters(
                     if hasattr(intermediate_result, "convergence")
                     else 0.0,
                     config={
-                        "bounds": bounds,
+                        "bounds": active_bounds,
                         "popsize": popsize,
                         "maxiter": maxiter,
                         "weights": weights,
@@ -617,10 +620,8 @@ def optimize_parameters(
             xk = intermediate_result.x
             if current_iter % 5 == 0:
                 print()
-                print(
-                    f"  └─ Params: bg={xk[0]:.3f}, grad={xk[1]:.5f}, halo={xk[2]:.3f}, noise={int(xk[3])}, "
-                    f"psf={xk[4]:.2f}, peak={xk[5]:.0f}, gauss={xk[6]:.4f}"
-                )
+                param_strs = [f"{n}={v:.4f}" for n, v in zip(active_names, xk)]
+                print(f"  └─ Params: {', '.join(param_strs)}")
 
         print("\n" + "┌" + "─" * 78 + "┐")
         print("│" + " " * 25 + "OPTIMIZATION RUNNING" + " " * 33 + "│")
@@ -630,7 +631,7 @@ def optimize_parameters(
 
         result = differential_evolution(
             objective_fn,
-            bounds=bounds,
+            bounds=active_bounds,
             maxiter=remaining_iters,
             popsize=popsize,
             workers=workers,
@@ -661,12 +662,21 @@ def optimize_parameters(
             f"Optimization duration: {elapsed_time / 60:.2f} minutes ({elapsed_time:.1f} seconds)"
         )
         print("\nOptimized parameters:")
-        for name, value in zip(PARAM_NAMES, result.x):
+        for name, value in zip(active_names, result.x):
             print(f"  {name}: {value:.6f}")
+        if fixed_params:
+            print("Fixed parameters:")
+            for name, value in fixed_params.items():
+                print(f"  {name}: {value:.6f} (fixed)")
         print("=" * 80 + "\n")
+
+        # Merge optimized active params with fixed params into a complete dict.
+        optimized = {n: float(v) for n, v in zip(active_names, result.x)}
+        optimized.update({n: float(v) for n, v in fixed_params.items()})
 
         optimization_results = {
             "timestamp": datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
+            "imaging_mode": imaging_mode,
             "optimization_info": {
                 "num_images": len(image_pairs),
                 "num_iterations": int(result.nit),
@@ -677,12 +687,10 @@ def optimize_parameters(
                 "success": bool(result.success),
                 "message": result.message,
             },
-            "parameters": {
-                name: float(value) for name, value in zip(PARAM_NAMES, result.x)
-            },
+            "parameters": optimized,
             "bounds": {
                 name: [float(low), float(high)]
-                for name, (low, high) in zip(PARAM_NAMES, bounds)
+                for name, (low, high) in zip(active_names, active_bounds)
             },
             "weights": weights,
         }
