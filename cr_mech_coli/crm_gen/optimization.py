@@ -686,6 +686,9 @@ def optimize_parameters(
                 "optimization_duration_minutes": float(elapsed_time / 60),
                 "success": bool(result.success),
                 "message": result.message,
+                "seed": seed,
+                "maxiter": maxiter,
+                "popsize": popsize,
             },
             "parameters": optimized,
             "bounds": {
