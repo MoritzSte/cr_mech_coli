@@ -29,7 +29,8 @@ from pathlib import Path
 
 from . import filters
 from . import bacteria
-from .background import generate_phase_contrast_background
+from .background import generate_phase_contrast_background, generate_fluorescence_background
+from .config import rgb_uint8_to_gray_uint16, rgb_mask_to_label_uint16
 
 
 def apply_synthetic_effects(
@@ -72,6 +73,8 @@ def apply_synthetic_effects(
     brightness_noise_strength: float = 0.0,
     # Separate background seed for consistent backgrounds across frames
     bg_seed: int = None,
+    # Imaging mode
+    imaging_mode: str = "phase_contrast",
 ) -> np.ndarray:
     """
     Apply synthetic microscope effects to a raw rendered image.
@@ -130,6 +133,9 @@ def apply_synthetic_effects(
             background is generated with this seed (enabling consistent backgrounds
             across frames) while ``seed`` is still used for noise and brightness.
             If None, ``seed`` is used for everything (default).
+        imaging_mode (str): Imaging mode controlling background generation and
+            effect application. Either ``"phase_contrast"`` (bright background,
+            halo effect) or ``"fluorescence"`` (dark background, no halo).
 
     Returns:
         np.ndarray: Processed synthetic image (H x W x 3), uint8.
@@ -143,22 +149,38 @@ def apply_synthetic_effects(
     synthetic_image = raw_image.copy().astype(np.float32)
     synthetic_image *= binary_mask[..., np.newaxis]
 
-    # Generate phase contrast background
+    # Generate background according to imaging mode.
     # Use bg_seed if provided (for consistent backgrounds across video frames),
     # otherwise fall back to the general seed.
-    bg = generate_phase_contrast_background(
-        shape=synthetic_image.shape[:2],
-        seed=bg_seed if bg_seed is not None else seed,
-        noise_scale=bg_noise_scale,
-        base_brightness=bg_base_brightness,
-        gradient_strength=bg_gradient_strength,
-        num_dark_spots_range=num_dark_spots_range,
-        dark_spot_size_range=dark_spot_size_range,
-        num_light_spots_range=num_light_spots_range,
-        texture_strength=texture_strength,
-        texture_scale=texture_scale,
-        blur_sigma=bg_blur_sigma,
-    )
+    bg_seed_to_use = bg_seed if bg_seed is not None else seed
+    if imaging_mode == "fluorescence":
+        bg = generate_fluorescence_background(
+            shape=synthetic_image.shape[:2],
+            seed=bg_seed_to_use,
+            base_brightness=bg_base_brightness,
+            texture_strength=texture_strength,
+            texture_scale=texture_scale,
+            blur_sigma=bg_blur_sigma,
+        )
+    elif imaging_mode == "phase_contrast":
+        bg = generate_phase_contrast_background(
+            shape=synthetic_image.shape[:2],
+            seed=bg_seed_to_use,
+            noise_scale=bg_noise_scale,
+            base_brightness=bg_base_brightness,
+            gradient_strength=bg_gradient_strength,
+            num_dark_spots_range=num_dark_spots_range,
+            dark_spot_size_range=dark_spot_size_range,
+            num_light_spots_range=num_light_spots_range,
+            texture_strength=texture_strength,
+            texture_scale=texture_scale,
+            blur_sigma=bg_blur_sigma,
+        )
+    else:
+        raise ValueError(
+            f"Unknown imaging_mode '{imaging_mode}'. "
+            "Must be 'phase_contrast' or 'fluorescence'."
+        )
 
     # Combine synthetic image with background
     synthetic_image = np.where(
@@ -202,17 +224,18 @@ def apply_synthetic_effects(
     # Clip to valid range
     synthetic_image = np.clip(synthetic_image, 0, 255).astype(np.uint8)
 
-    # Apply halo effect filter
-    synthetic_image = filters.apply_halo_effect(
-        synthetic_image,
-        binary_mask,
-        halo_intensity=bac_halo_intensity,
-        halo_type=halo_type,
-        inner_width=halo_inner_width,
-        outer_width=halo_outer_width,
-        blur_sigma=halo_blur_sigma,
-        fade_type=halo_fade_type,
-    )
+    # Apply halo effect filter (phase contrast only)
+    if imaging_mode == "phase_contrast":
+        synthetic_image = filters.apply_halo_effect(
+            synthetic_image,
+            binary_mask,
+            halo_intensity=bac_halo_intensity,
+            halo_type=halo_type,
+            inner_width=halo_inner_width,
+            outer_width=halo_outer_width,
+            blur_sigma=halo_blur_sigma,
+            fade_type=halo_fade_type,
+        )
 
     # Apply microscope effects (PSF, noise)
     synthetic_image = filters.apply_microscope_effects(
@@ -270,6 +293,8 @@ def create_synthetic_scene(
     texture_strength: float = 0.02,
     texture_scale: float = 1.5,
     bg_blur_sigma: float = 0.8,
+    # Imaging mode
+    imaging_mode: str = "phase_contrast",
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Creates a synthetic microscope image from a real one using cr_mech_coli.
@@ -298,9 +323,13 @@ def create_synthetic_scene(
         num_dark_spots_range (tuple): (min, max) range for number of dark spots in
             background.
         output_prefix (str): Prefix for output filenames.
+        imaging_mode (str): Imaging mode. Either ``"phase_contrast"`` or
+            ``"fluorescence"``. Controls background type and halo application.
 
     Returns:
-        tuple[np.ndarray, np.ndarray]: (synthetic_image, synthetic_mask).
+        tuple[np.ndarray, np.ndarray]: (synthetic_image, synthetic_mask) as
+            RGB uint8 arrays for internal use. The saved TIFF files are
+            grayscale uint16 (image) and integer label uint16 (mask).
     """
     # Generate random seed if not provided
     if seed is None:
@@ -436,16 +465,18 @@ def create_synthetic_scene(
         texture_strength=texture_strength,
         texture_scale=texture_scale,
         bg_blur_sigma=bg_blur_sigma,
+        imaging_mode=imaging_mode,
     )
 
-    # Save results with output_prefix + original filename
+    # Save results with output_prefix + original filename.
+    # Convert to standard microscopy format (grayscale uint16 image, integer label mask).
     image_name = Path(microscope_image_path).stem
     mask_name = Path(segmentation_mask_path).stem
 
     output_image_path = output_dir / f"{output_prefix}{image_name}.tif"
     output_mask_path = output_dir / f"{output_prefix}{mask_name}.tif"
 
-    tiff.imwrite(output_image_path, synthetic_image, compression="zlib")
-    tiff.imwrite(output_mask_path, synthetic_mask, compression="zlib")
+    tiff.imwrite(output_image_path, rgb_uint8_to_gray_uint16(synthetic_image), compression="zlib")
+    tiff.imwrite(output_mask_path, rgb_mask_to_label_uint16(synthetic_mask), compression="zlib")
 
     return synthetic_image, synthetic_mask
