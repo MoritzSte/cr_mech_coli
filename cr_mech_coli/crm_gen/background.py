@@ -353,3 +353,49 @@ def generate_phase_contrast_background(
         background = (background * 255).astype(np.uint8)
 
     return background
+
+
+def generate_fluorescence_background(
+    shape: Tuple[int, int] = (512, 512),
+    base_brightness: float = 0.02,
+    texture_strength: float = 0.01,
+    texture_scale: float = 1.5,
+    blur_sigma: float = 0.5,
+    seed: int = None,
+    return_uint8: bool = True,
+) -> np.ndarray:
+    """
+    Generate a dark background for fluorescence microscopy.
+
+    Unlike phase contrast, fluorescence backgrounds are near-black with only
+    camera noise — no illumination gradients, dark spots, or halo artifacts.
+
+    Args:
+        shape (Tuple[int, int]): Shape of the background image (height, width).
+        base_brightness (float): Dark background level (0.0–1.0), typically 0.01–0.05.
+        texture_strength (float): Camera noise texture amplitude (0.0–1.0).
+        texture_scale (float): Noise smoothness (higher = smoother).
+        blur_sigma (float): Slight Gaussian blur to simulate optical spread.
+        seed (int): Random seed for reproducibility. If None, uses random state.
+        return_uint8 (bool): If True, return uint8 array (0–255), otherwise float
+            (0.0–1.0).
+
+    Returns:
+        np.ndarray: Dark synthetic fluorescence background.
+    """
+    if seed is not None:
+        np.random.seed(seed)
+
+    background = np.full(shape, base_brightness, dtype=np.float64)
+    background = add_fine_texture(
+        background,
+        texture_strength=texture_strength,
+        texture_scale=texture_scale,
+        seed=seed,
+    )
+    background = add_gaussian_blur(background, sigma=blur_sigma)
+    background = np.clip(background, 0.0, 1.0)
+
+    if return_uint8:
+        return (background * 255).astype(np.uint8)
+    return background
