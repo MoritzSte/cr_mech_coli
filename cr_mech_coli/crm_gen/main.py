@@ -255,6 +255,7 @@ def _run_clone(args, config):
         texture_strength=background_config.get("texture_strength", 0.02),
         texture_scale=background_config.get("texture_scale", 1.5),
         bg_blur_sigma=background_config.get("blur_sigma", 0.8),
+        imaging_mode=synthetic_config.get("imaging_mode", "phase_contrast"),
     )
 
 
@@ -273,10 +274,8 @@ def _run_fit(args, config, config_path):
         compute_final_metrics,
         save_results,
         generate_all_synthetics,
-        DEFAULT_BOUNDS,
-        DEFAULT_WEIGHTS,
-        PARAM_NAMES,
     )
+    from .config import get_active_param_config, DEFAULT_BOUNDS, DEFAULT_WEIGHTS, PARAM_NAMES
     from .visualization import generate_comparison_plot, generate_detailed_plots
 
     opt_config = config.get("optimization", {})
@@ -295,6 +294,7 @@ def _run_fit(args, config, config_path):
     resume = opt_config.get("resume", False)
     no_checkpoint = opt_config.get("no_checkpoint", False)
     save_all_synthetics = opt_config.get("save_all_synthetics", False)
+    imaging_mode = opt_config.get("imaging_mode", "phase_contrast")
 
     # Metric weights
     metric_weights_config = opt_config.get("metric_weights", {})
@@ -313,10 +313,11 @@ def _run_fit(args, config, config_path):
         "foreground": region_weights_config.get("foreground", 0.5),
     }
 
-    # Parameter bounds — read from config, fall back to DEFAULT_BOUNDS with warnings
+    # Parameter bounds — only load for parameters active in this imaging mode.
+    active_names, default_active_bounds, _ = get_active_param_config(imaging_mode)
     bounds_config = opt_config.get("bounds", {})
     bounds = []
-    for name, default_bound in zip(PARAM_NAMES, DEFAULT_BOUNDS):
+    for name, default_bound in zip(active_names, default_active_bounds):
         if name in bounds_config:
             bounds.append(tuple(bounds_config[name]))
         else:
@@ -353,6 +354,7 @@ def _run_fit(args, config, config_path):
         n_vertices=n_vertices,
         resume=resume,
         no_checkpoint=no_checkpoint,
+        imaging_mode=imaging_mode,
     )
 
     # Compute final metrics
