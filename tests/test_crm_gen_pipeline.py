@@ -72,15 +72,21 @@ def test_run_pipeline_smoke(tmp_path):
     assert len(syn_masks) >= 1, "no synthetic mask .tif files found"
 
     syn_img = tifffile.imread(syn_images[0])
-    assert syn_img.ndim == 3 and syn_img.shape[2] == 3, (
-        f"expected RGB synthetic image (H, W, 3), got shape {syn_img.shape}"
+    assert syn_img.ndim == 2, (
+        f"expected grayscale uint16 synthetic image (H, W), got shape {syn_img.shape}"
     )
-    assert syn_img.dtype == np.uint8
+    assert syn_img.dtype == np.uint16
 
-    # --- generated and synthetic images have the same spatial dimensions ---
-    assert raw_img.shape == syn_img.shape, (
-        f"generated and synthetic images have different shapes: "
-        f"{raw_img.shape} vs {syn_img.shape}"
+    syn_mask = tifffile.imread(syn_masks[0])
+    assert syn_mask.ndim == 2, (
+        f"expected integer label uint16 synthetic mask (H, W), got shape {syn_mask.shape}"
+    )
+    assert syn_mask.dtype == np.uint16
+
+    # --- synthetic image has the same spatial dimensions as the raw image ---
+    assert raw_img.shape[:2] == syn_img.shape, (
+        f"generated and synthetic images have different spatial shapes: "
+        f"{raw_img.shape[:2]} vs {syn_img.shape}"
     )
 
     # --- synthetic image is not trivially empty (all-black) ---
