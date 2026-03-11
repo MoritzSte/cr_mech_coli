@@ -63,6 +63,7 @@ pbr = false                             # Physics-based rendering (disabled)
 ssao_radius = 0.0                       # Screen-space ambient occlusion (disabled)
 
 [synthetic]
+imaging_mode = "phase_contrast"         # Imaging mode: "phase_contrast" or "fluorescence"
 # The 7 optimised imaging parameters (output of `crm_gen fit`)
 bg_base_brightness = 0.2845             # Base brightness for background (0.0-1.0)
 bg_gradient_strength = 0.0185           # Illumination gradient intensity (0.0-1.0)
