@@ -31,7 +31,7 @@ from tqdm import tqdm
 
 import cr_mech_coli as crm
 from .scene import apply_synthetic_effects
-from .config import PARAM_NAMES
+from .config import PARAM_NAMES, rgb_uint8_to_gray_uint16, rgb_mask_to_label_uint16
 
 # Alias for backwards compatibility
 OPTIMIZED_PARAM_KEYS = PARAM_NAMES
@@ -384,6 +384,9 @@ def process_frame_for_synthetic(args):
     apply_poisson = params.get('apply_poisson', True)
     apply_gaussian = params.get('apply_gaussian', True)
 
+    # Imaging mode
+    imaging_mode = synthetic_config.get('imaging_mode', 'phase_contrast')
+
     # Background params
     bg_dark_spot_size_range = tuple(background_config.get('dark_spot_size_range', [2, 5]))
     bg_num_dark_spots_range = tuple(background_config.get('num_dark_spots_range', [0, 5]))
@@ -442,19 +445,21 @@ def process_frame_for_synthetic(args):
         # Brightness noise
         brightness_noise_strength=brightness_noise_strength,
         # Consistent background across frames
-        bg_seed=bg_seed
+        bg_seed=bg_seed,
+        # Imaging mode
+        imaging_mode=imaging_mode,
     )
 
-    # Save synthetic image and copy mask
+    # Save synthetic image and mask in standard microscopy format (grayscale uint16).
     output_prefix = f"syn_{frame_name}"
     tiff.imwrite(
         synthetic_dir / f"{output_prefix}.tif",
-        synthetic_image,
+        rgb_uint8_to_gray_uint16(synthetic_image),
         compression='zlib'
     )
     tiff.imwrite(
         synthetic_dir / f"{output_prefix}_masks.tif",
-        mask,
+        rgb_mask_to_label_uint16(mask),
         compression='zlib'
     )
 
