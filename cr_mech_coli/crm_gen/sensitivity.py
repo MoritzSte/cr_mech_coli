@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import inspect
+
 import numpy as np
 from tqdm import tqdm
 
@@ -33,6 +35,19 @@ from .parameter_registry import (
     get_all_defaults,
     build_full_params,
 )
+
+
+def _salib_call(func, *args, seed=None, **kwargs):
+    """Call a SALib function, passing *seed* only if the function accepts it.
+
+    Older SALib versions (< 1.5) do not support the ``seed`` keyword on
+    ``sample()`` / ``analyze()``.  This wrapper inspects the signature and
+    silently drops the argument when it is not supported.
+    """
+    sig = inspect.signature(func)
+    if "seed" in sig.parameters:
+        return func(*args, seed=seed, **kwargs)
+    return func(*args, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -367,7 +382,7 @@ def run_sobol_analysis(
     print(f"Parameters: {k}")
     print(f"Base samples (N): {n_samples}")
 
-    X = saltelli.sample(problem, N=n_samples, seed=seed)
+    X = _salib_call(saltelli.sample, problem, N=n_samples, seed=seed)
     num_evals = X.shape[0]
     print(f"Total evaluations: {num_evals}")
     print(f"Images used: {len(image_pairs)}")
@@ -385,7 +400,7 @@ def run_sobol_analysis(
     try:
         Y = _evaluate_parallel(obj, X, num_evals, workers, desc="Sobol evaluations")
 
-        si = sobol_analyze.analyze(problem, Y, seed=seed)
+        si = _salib_call(sobol_analyze.analyze, problem, Y, seed=seed)
 
         s1 = {n: float(v) for n, v in zip(param_names, si["S1"])}
         st = {n: float(v) for n, v in zip(param_names, si["ST"])}
