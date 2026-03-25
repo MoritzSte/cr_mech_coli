@@ -12,15 +12,6 @@ optical effects to produce a realistic microscope frame:
 
 """
 
-# Configure offscreen rendering for headless cluster environments
-# Must be set BEFORE importing pyvista/vtk
-import os
-
-os.environ.setdefault("PYVISTA_OFF_SCREEN", "true")
-os.environ.setdefault("VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN", "1")
-# Force OSMesa software rendering (avoids EGL/GPU permission issues on clusters)
-os.environ.setdefault("DISPLAY", "")
-os.environ.setdefault("VTK_USE_OFFSCREEN_EGL", "0")
 
 import cr_mech_coli as crm
 import numpy as np
@@ -30,6 +21,7 @@ from pathlib import Path
 from . import filters
 from . import bacteria
 from .background import generate_phase_contrast_background
+from .parameter_registry import _get_cached_defaults
 
 
 def apply_synthetic_effects(
@@ -63,7 +55,6 @@ def apply_synthetic_effects(
     texture_scale: float = 1.5,
     bg_blur_sigma: float = 0.8,
     # Halo params (previously hardcoded)
-    halo_type: str = "bright",
     halo_inner_width: float = 2.0,
     halo_outer_width: float = 50.0,
     halo_blur_sigma: float = 0.5,
@@ -72,6 +63,8 @@ def apply_synthetic_effects(
     brightness_noise_strength: float = 0.0,
     # Separate background seed for consistent backgrounds across frames
     bg_seed: int = None,
+    # Dict-based parameter override — keys override individual kwargs above
+    params: dict = None,
 ) -> np.ndarray:
     """
     Apply synthetic microscope effects to a raw rendered image.
@@ -119,7 +112,6 @@ def apply_synthetic_effects(
         texture_strength (float): Fine texture strength (0.0-1.0).
         texture_scale (float): Texture smoothness (higher = smoother).
         bg_blur_sigma (float): Gaussian blur sigma for background optical effects.
-        halo_type (str): Type of halo: "bright", "dark", or "mixed".
         halo_inner_width (float): Width of inner halo in pixels.
         halo_outer_width (float): Total halo width in pixels.
         halo_blur_sigma (float): Gaussian blur sigma for halo transition.
@@ -134,6 +126,32 @@ def apply_synthetic_effects(
     Returns:
         np.ndarray: Processed synthetic image (H x W x 3), uint8.
     """
+    # When a params dict is provided, merge with registry defaults and use
+    # those values.  Individual kwargs are overridden by the dict.
+    if params is not None:
+        _p = {**_get_cached_defaults(), **params}
+        bg_base_brightness = _p["bg_base_brightness"]
+        bg_gradient_strength = _p["bg_gradient_strength"]
+        bac_halo_intensity = _p["bac_halo_intensity"]
+        bg_noise_scale = int(_p["bg_noise_scale"])
+        psf_sigma = _p["psf_sigma"]
+        peak_signal = _p["peak_signal"]
+        gaussian_sigma = _p["gaussian_sigma"]
+        texture_strength = _p["texture_strength"]
+        texture_scale = _p["texture_scale"]
+        bg_blur_sigma = _p["bg_blur_sigma"]
+        dark_spot_intensity = _p["dark_spot_intensity"]
+        num_dark_spots_max = int(_p["num_dark_spots_max"])
+        num_dark_spots_range = (0, num_dark_spots_max)
+        halo_inner_width = _p["halo_inner_width"]
+        halo_outer_width = _p["halo_outer_width"]
+        halo_blur_sigma = _p["halo_blur_sigma"]
+        brightness_noise_strength = _p["brightness_noise_strength"]
+        psf_size = int(_p["psf_size"])
+    else:
+        dark_spot_intensity = 0.15  # legacy default
+        psf_size = 7
+
     # Generate random seed if not provided
     if seed is None:
         seed = np.random.default_rng().integers(0, 2**31)
@@ -153,6 +171,7 @@ def apply_synthetic_effects(
         base_brightness=bg_base_brightness,
         gradient_strength=bg_gradient_strength,
         num_dark_spots_range=num_dark_spots_range,
+        dark_spot_intensity=dark_spot_intensity,
         dark_spot_size_range=dark_spot_size_range,
         num_light_spots_range=num_light_spots_range,
         texture_strength=texture_strength,
@@ -207,7 +226,6 @@ def apply_synthetic_effects(
         synthetic_image,
         binary_mask,
         halo_intensity=bac_halo_intensity,
-        halo_type=halo_type,
         inner_width=halo_inner_width,
         outer_width=halo_outer_width,
         blur_sigma=halo_blur_sigma,
@@ -219,6 +237,7 @@ def apply_synthetic_effects(
         synthetic_image,
         apply_psf=apply_psf,
         psf_sigma=psf_sigma,
+        psf_size=psf_size,
         apply_poisson=apply_poisson,
         peak_signal=peak_signal,
         apply_gaussian=apply_gaussian,
@@ -232,7 +251,7 @@ def apply_synthetic_effects(
 def create_synthetic_scene(
     microscope_image_path,
     segmentation_mask_path,
-    output_dir,
+    output_dir=None,
     n_vertices: int = 8,
     bg_base_brightness: float = 0.56,
     bg_gradient_strength: float = 0.027,
@@ -259,7 +278,6 @@ def create_synthetic_scene(
     apply_poisson: bool = True,
     apply_gaussian: bool = True,
     # Halo params
-    halo_type: str = "bright",
     halo_inner_width: float = 2.0,
     halo_outer_width: float = 50.0,
     halo_blur_sigma: float = 0.5,
@@ -270,6 +288,10 @@ def create_synthetic_scene(
     texture_strength: float = 0.02,
     texture_scale: float = 1.5,
     bg_blur_sigma: float = 0.8,
+    # Dict-based parameter override — keys override individual kwargs above
+    params: dict = None,
+    # Whether to write output files to disk (set False for optimization/screening)
+    save: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Creates a synthetic microscope image from a real one using cr_mech_coli.
@@ -305,9 +327,10 @@ def create_synthetic_scene(
     # Generate random seed if not provided
     if seed is None:
         seed = np.random.default_rng().integers(0, 2**31)
-    # Create output directory
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # Create output directory (only when saving)
+    if save:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
 
     # Load real microscope image and mask
     microscope_image = tiff.imread(microscope_image_path)
@@ -324,8 +347,24 @@ def create_synthetic_scene(
     n_cells = len(positions)
 
     if n_cells == 0:
-        print("No cells found in mask. Exiting.")
-        return
+        print("Warning: No cells found in mask. Returning blank image.")
+        h, w = segmentation_mask.shape[:2]
+        blank_img = np.ones((h, w, 3), dtype=np.uint8) * 128
+        blank_mask = np.zeros((h, w, 3), dtype=np.uint8)
+        if save:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            image_name = Path(microscope_image_path).stem
+            mask_name = Path(segmentation_mask_path).stem
+            tiff.imwrite(
+                output_dir / f"{output_prefix}{image_name}.tif",
+                blank_img, compression="zlib",
+            )
+            tiff.imwrite(
+                output_dir / f"{output_prefix}{mask_name}.tif",
+                blank_mask, compression="zlib",
+            )
+        return blank_img, blank_mask
 
     # Create cells dictionary and assign colors
     from cr_mech_coli import RodAgent, CellIdentifier
@@ -402,50 +441,68 @@ def create_synthetic_scene(
     )
 
     # Apply synthetic effects using shared function
-    synthetic_image = apply_synthetic_effects(
-        raw_image=synthetic_image,
-        mask=synthetic_mask,
-        bg_base_brightness=bg_base_brightness,
-        bg_gradient_strength=bg_gradient_strength,
-        bac_halo_intensity=bac_halo_intensity,
-        bg_noise_scale=bg_noise_scale,
-        psf_sigma=psf_sigma,
-        peak_signal=peak_signal,
-        gaussian_sigma=gaussian_sigma,
-        seed=seed,
-        brightness_mode=brightness_mode,
-        cell_ages=cell_ages,
-        cell_colors_map=cell_colors_map,
-        brightness_range=brightness_range,
-        max_age=max_age,
-        num_dark_spots_range=num_dark_spots_range,
-        original_image=microscope_image,
-        original_mask=segmentation_mask,
-        original_colors=colors,
-        brightness_noise_strength=brightness_noise_strength,
-        apply_psf=apply_psf,
-        apply_poisson=apply_poisson,
-        apply_gaussian=apply_gaussian,
-        halo_type=halo_type,
-        halo_inner_width=halo_inner_width,
-        halo_outer_width=halo_outer_width,
-        halo_blur_sigma=halo_blur_sigma,
-        halo_fade_type=halo_fade_type,
-        dark_spot_size_range=dark_spot_size_range,
-        num_light_spots_range=num_light_spots_range,
-        texture_strength=texture_strength,
-        texture_scale=texture_scale,
-        bg_blur_sigma=bg_blur_sigma,
-    )
+    if params is not None:
+        # Dict-based path: only pass non-imaging kwargs + params dict
+        synthetic_image = apply_synthetic_effects(
+            raw_image=synthetic_image,
+            mask=synthetic_mask,
+            seed=seed,
+            brightness_mode=brightness_mode,
+            cell_ages=cell_ages,
+            cell_colors_map=cell_colors_map,
+            brightness_range=brightness_range,
+            max_age=max_age,
+            original_image=microscope_image,
+            original_mask=segmentation_mask,
+            original_colors=colors,
+            params=params,
+        )
+    else:
+        # Legacy kwargs path (used by clone subcommand)
+        synthetic_image = apply_synthetic_effects(
+            raw_image=synthetic_image,
+            mask=synthetic_mask,
+            bg_base_brightness=bg_base_brightness,
+            bg_gradient_strength=bg_gradient_strength,
+            bac_halo_intensity=bac_halo_intensity,
+            bg_noise_scale=bg_noise_scale,
+            psf_sigma=psf_sigma,
+            peak_signal=peak_signal,
+            gaussian_sigma=gaussian_sigma,
+            seed=seed,
+            brightness_mode=brightness_mode,
+            cell_ages=cell_ages,
+            cell_colors_map=cell_colors_map,
+            brightness_range=brightness_range,
+            max_age=max_age,
+            num_dark_spots_range=num_dark_spots_range,
+            original_image=microscope_image,
+            original_mask=segmentation_mask,
+            original_colors=colors,
+            brightness_noise_strength=brightness_noise_strength,
+            apply_psf=apply_psf,
+            apply_poisson=apply_poisson,
+            apply_gaussian=apply_gaussian,
+            halo_inner_width=halo_inner_width,
+            halo_outer_width=halo_outer_width,
+            halo_blur_sigma=halo_blur_sigma,
+            halo_fade_type=halo_fade_type,
+            dark_spot_size_range=dark_spot_size_range,
+            num_light_spots_range=num_light_spots_range,
+            texture_strength=texture_strength,
+            texture_scale=texture_scale,
+            bg_blur_sigma=bg_blur_sigma,
+        )
 
     # Save results with output_prefix + original filename
-    image_name = Path(microscope_image_path).stem
-    mask_name = Path(segmentation_mask_path).stem
+    if save:
+        image_name = Path(microscope_image_path).stem
+        mask_name = Path(segmentation_mask_path).stem
 
-    output_image_path = output_dir / f"{output_prefix}{image_name}.tif"
-    output_mask_path = output_dir / f"{output_prefix}{mask_name}.tif"
+        output_image_path = output_dir / f"{output_prefix}{image_name}.tif"
+        output_mask_path = output_dir / f"{output_prefix}{mask_name}.tif"
 
-    tiff.imwrite(output_image_path, synthetic_image, compression="zlib")
-    tiff.imwrite(output_mask_path, synthetic_mask, compression="zlib")
+        tiff.imwrite(output_image_path, synthetic_image, compression="zlib")
+        tiff.imwrite(output_mask_path, synthetic_mask, compression="zlib")
 
     return synthetic_image, synthetic_mask
