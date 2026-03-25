@@ -191,8 +191,7 @@ def add_poisson_noise(
         Gaussian noise. Variance = mean for Poisson, so brighter = noisier in
         absolute terms.
     """
-    if seed is not None:
-        np.random.seed(seed)
+    rng = np.random.default_rng(seed)
 
     # Remember input dtype
     input_dtype = image.dtype
@@ -213,14 +212,7 @@ def add_poisson_noise(
         return image.copy()
 
     # Apply Poisson noise
-    if len(img_float.shape) == 2:
-        # Grayscale
-        noisy_photons = np.random.poisson(photon_counts)
-    else:
-        # RGB/multi-channel
-        noisy_photons = np.zeros_like(photon_counts)
-        for i in range(img_float.shape[2]):
-            noisy_photons[:, :, i] = np.random.poisson(photon_counts[:, :, i])
+    noisy_photons = rng.poisson(photon_counts)
 
     # Scale back to [0,1]
     result = noisy_photons / peak_signal
@@ -262,8 +254,7 @@ def add_gaussian_noise(
         Apply AFTER Poisson noise (it's the last noise source in the imaging chain).
         Also called "additive white Gaussian noise" (AWGN).
     """
-    if seed is not None:
-        np.random.seed(seed)
+    rng = np.random.default_rng(seed)
 
     # Remember input dtype
     input_dtype = image.dtype
@@ -276,7 +267,7 @@ def add_gaussian_noise(
         img_float = image.astype(np.float64)
 
     # Generate Gaussian noise
-    noise = np.random.normal(0, sigma, img_float.shape)
+    noise = rng.normal(0, sigma, img_float.shape)
 
     # Add noise
     result = img_float + noise
@@ -347,58 +338,6 @@ def apply_gaussian_blur(image: np.ndarray, sigma: float = 1.0) -> np.ndarray:
 # ============================================================================
 
 
-def create_halo_mask(
-    mask: np.ndarray, inner_width: float = 2.0, outer_width: float = 8.0
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Create inner and outer halo regions around bacteria mask boundaries.
-
-    Uses distance transform to create ring-shaped regions around mask edges
-    that will be used for halo effects.
-
-    Args:
-        mask (np.ndarray): Binary mask where True/1 = bacteria (foreground),
-            False/0 = background.
-        inner_width (float): Width of inner halo region (in pixels from edge).
-            This is typically the bright part of the halo.
-        outer_width (float): Width of outer halo region (in pixels from edge).
-            This is typically the darker/fading part.
-
-    Returns:
-        Tuple[np.ndarray, np.ndarray]: (inner_halo_mask, outer_halo_mask) - Boolean
-            arrays indicating halo regions.
-    """
-    from scipy.ndimage import distance_transform_edt
-
-    # Convert to boolean if needed
-    if mask.dtype != bool:
-        mask_bool = mask > 0
-    else:
-        mask_bool = mask.copy()
-
-    # Distance from foreground edge (outside the bacteria)
-    # This gives distance from each background pixel to nearest foreground pixel
-    distance_outside = distance_transform_edt(~mask_bool)
-
-    # Distance from background edge (inside the bacteria)
-    # This gives distance from each foreground pixel to nearest background pixel
-    distance_inside = distance_transform_edt(mask_bool)
-
-    # Inner halo: close to the edge, both inside and outside
-    # This will be the bright ring
-    inner_halo_outside = (distance_outside > 0) & (distance_outside <= inner_width)
-    inner_halo_inside = (distance_inside > 0) & (distance_inside <= inner_width)
-    inner_halo_mask = inner_halo_outside | inner_halo_inside
-
-    # Outer halo: further from edge, only outside
-    # This will be the darker/fading ring
-    outer_halo_mask = (distance_outside > inner_width) & (
-        distance_outside <= outer_width
-    )
-
-    return inner_halo_mask, outer_halo_mask
-
-
 def create_halo_gradient(
     mask: np.ndarray,
     inner_width: float = 2.0,
@@ -466,14 +405,13 @@ def apply_halo_effect(
     image: np.ndarray,
     mask: np.ndarray,
     halo_intensity: float = 0.15,
-    halo_type: str = "bright",
     inner_width: float = 2.0,
     outer_width: float = 8.0,
     fade_type: str = "exponential",
     blur_sigma: float = 1.5,
 ) -> np.ndarray:
     """
-    Apply phase contrast halo effect around bacteria edges.
+    Apply bright phase contrast halo effect around bacteria edges.
 
     Args:
         image (np.ndarray): Input image (grayscale or RGB). Can be float [0,1] or
@@ -481,8 +419,6 @@ def apply_halo_effect(
         mask (np.ndarray): Binary mask where True/1 = bacteria (foreground).
         halo_intensity (float): Strength of halo effect (0.0 to 1.0). Higher values
             create more pronounced halos. Typical range: 0.1-0.3.
-        halo_type (str): Type of halo: 'bright' (positive phase), 'dark' (negative
-            phase), or 'mixed' (bright inner with bright outer at reduced intensity).
         inner_width (float): Width of inner halo in pixels (typically bright).
         outer_width (float): Total width of halo region in pixels.
         fade_type (str): How halo fades: 'linear', 'exponential', or 'gaussian'.
@@ -518,24 +454,8 @@ def apply_halo_effect(
     # Apply Gaussian blur to smooth the gradient
     gradient_smooth = gaussian_filter(gradient, sigma=blur_sigma)
 
-    # Create halo intensity field based on type
-    if halo_type == "bright":
-        # Bright halo (positive phase shift)
-        halo_field = gradient_smooth * halo_intensity
-    elif halo_type == "mixed":
-        # Mixed: bright inner, bright outer (reduced intensity)
-        inner_halo, outer_halo = create_halo_mask(mask_bool, inner_width, outer_width)
-
-        # Bright inner halo
-        halo_field = gradient_smooth * halo_intensity * inner_halo.astype(float)
-
-        # Bright outer halo (strongly reduced intensity)
-        outer_gradient = gaussian_filter(outer_halo.astype(float), sigma=blur_sigma)
-        halo_field += outer_gradient * halo_intensity * 0.2
-    else:
-        raise ValueError(
-            f"Unknown halo_type: {halo_type}. Use 'bright', 'dark', or 'mixed'"
-        )
+    # Bright halo (positive phase shift)
+    halo_field = gradient_smooth * halo_intensity
 
     # Apply halo to image
     if len(img_float.shape) == 2:
@@ -561,7 +481,6 @@ def apply_phase_contrast_pipeline(
     # Halo parameters
     apply_halo: bool = True,
     halo_intensity: float = 0.15,
-    halo_type: str = "mixed",
     halo_inner_width: float = 2.0,
     halo_outer_width: float = 8.0,
     halo_fade_type: str = "exponential",
@@ -595,7 +514,6 @@ def apply_phase_contrast_pipeline(
         mask (np.ndarray): Binary mask where True/1 = bacteria (foreground).
         apply_halo (bool): Whether to apply phase contrast halo effect.
         halo_intensity (float): Strength of halo effect (0.1-0.3 typical).
-        halo_type (str): Halo type: 'bright', 'dark', or 'mixed'.
         halo_inner_width (float): Width of inner bright halo (pixels).
         halo_outer_width (float): Total halo width (pixels).
         halo_fade_type (str): Fade type: 'linear', 'exponential', or 'gaussian'.
@@ -621,7 +539,6 @@ def apply_phase_contrast_pipeline(
             result,
             mask=mask,
             halo_intensity=halo_intensity,
-            halo_type=halo_type,
             inner_width=halo_inner_width,
             outer_width=halo_outer_width,
             fade_type=halo_fade_type,
