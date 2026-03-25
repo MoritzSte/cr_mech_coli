@@ -93,10 +93,9 @@ blur_sigma = 0.8                        # Gaussian blur sigma for optical effect
 
 [halo]
 # Halo effect parameters around bacteria
-halo_type = "bright"                    # Type: "bright", "dark", or "mixed"
 inner_width = 2.0                       # Width of inner halo in pixels
 outer_width = 50.0                      # Total halo width in pixels
-blur_sigma = 0.01                       # Gaussian blur sigma for halo transition (default 0.5)
+blur_sigma = 0.5                        # Gaussian blur sigma for halo transition
 fade_type = "exponential"               # Fade type: "linear", "exponential", or "gaussian"
 
 [brightness]
