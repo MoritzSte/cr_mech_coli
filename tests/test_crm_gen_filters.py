@@ -102,7 +102,7 @@ def test_halo_effect_modifies_boundary_pixels():
     img = _gray_image(100)
     mask = _circular_mask()
 
-    result = apply_halo_effect(img, mask, halo_intensity=0.4, halo_type="bright")
+    result = apply_halo_effect(img, mask, halo_intensity=0.4)
 
     # A thin ring just outside the mask boundary
     from scipy.ndimage import distance_transform_edt
