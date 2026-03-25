@@ -16,7 +16,7 @@ def create_base_background(
     base_brightness: float = 0.6,
     gradient_strength: float = 0.05,
     perlin_scale: int = 4,
-    seed: int = None,
+    rng: np.random.Generator = None,
 ) -> np.ndarray:
     """
     Create a base background with subtle gradients mimicking illumination variations.
@@ -27,13 +27,13 @@ def create_base_background(
         base_brightness (float): Base brightness level (0.0 to 1.0).
         gradient_strength (float): Strength of illumination gradients (0.0 to 1.0).
         perlin_scale (int): Number of octaves for Perlin-like noise.
-        seed (int): Random seed for reproducibility. If None, uses random state.
+        rng (np.random.Generator): Random number generator. If None, creates a new one.
 
     Returns:
         np.ndarray: Base background image with values between 0 and 1.
     """
-    if seed is not None:
-        np.random.seed(seed)
+    if rng is None:
+        rng = np.random.default_rng()
 
     height, width = shape
 
@@ -56,7 +56,7 @@ def create_base_background(
         octave_width = max(width // (noise_scale * frequency), 4)
 
         # Generate random noise for this octave
-        octave_noise = np.random.randn(octave_height, octave_width)
+        octave_noise = rng.standard_normal((octave_height, octave_width))
 
         # Smooth it slightly to create coherent blobs
         octave_noise = gaussian_filter(octave_noise, sigma=10.0)
@@ -88,7 +88,7 @@ def add_darker_spots(
     num_spots_range: Tuple[int, int] = (0, 50),
     spot_intensity: float = 0.15,
     spot_size_range: Tuple[float, float] = (2.0, 8.0),
-    seed: int = None,
+    rng: np.random.Generator = None,
 ) -> np.ndarray:
     """
     Add randomly distributed darker spots to simulate debris or artifacts.
@@ -101,13 +101,13 @@ def add_darker_spots(
             0.0 to 1.0).
         spot_size_range (Tuple[float, float]): Range of spot sizes (sigma values for
             Gaussian blobs).
-        seed (int): Random seed for reproducibility. If None, uses random state.
+        rng (np.random.Generator): Random number generator. If None, creates a new one.
 
     Returns:
         np.ndarray: Background with added dark spots.
     """
-    if seed is not None:
-        np.random.seed(seed)
+    if rng is None:
+        rng = np.random.default_rng()
 
     result = background.copy()
     height, width = background.shape
@@ -116,18 +116,18 @@ def add_darker_spots(
     if num_spots_range[0] == num_spots_range[1]:
         num_spots = num_spots_range[0]
     else:
-        num_spots = np.random.randint(num_spots_range[0], num_spots_range[1] + 1)
+        num_spots = rng.integers(num_spots_range[0], num_spots_range[1] + 1)
 
     for _ in range(num_spots):
         # Random position
-        y = np.random.randint(0, height)
-        x = np.random.randint(0, width)
+        y = rng.integers(0, height)
+        x = rng.integers(0, width)
 
         # Random size
-        sigma = np.random.uniform(spot_size_range[0], spot_size_range[1])
+        sigma = rng.uniform(spot_size_range[0], spot_size_range[1])
 
         # Random intensity variation (80% to 100% of specified intensity)
-        intensity = spot_intensity * np.random.uniform(0.8, 1.0)
+        intensity = spot_intensity * rng.uniform(0.8, 1.0)
 
         # Create Gaussian spot
         y_grid, x_grid = np.ogrid[:height, :width]
@@ -148,7 +148,7 @@ def add_lighter_spots(
     num_spots_range: Tuple[int, int] = (0, 30),
     spot_intensity: float = 0.12,
     spot_size_range: Tuple[float, float] = (3.0, 12.0),
-    seed: int = None,
+    rng: np.random.Generator = None,
 ) -> np.ndarray:
     """
     Add randomly distributed lighter spots to simulate phase artifacts or bright debris.
@@ -161,13 +161,13 @@ def add_lighter_spots(
             0.0 to 1.0).
         spot_size_range (Tuple[float, float]): Range of spot sizes (sigma values for
             Gaussian blobs).
-        seed (int): Random seed for reproducibility. If None, uses random state.
+        rng (np.random.Generator): Random number generator. If None, creates a new one.
 
     Returns:
         np.ndarray: Background with added light spots.
     """
-    if seed is not None:
-        np.random.seed(seed)
+    if rng is None:
+        rng = np.random.default_rng()
 
     result = background.copy()
     height, width = background.shape
@@ -176,18 +176,18 @@ def add_lighter_spots(
     if num_spots_range[0] == num_spots_range[1]:
         num_spots = num_spots_range[0]
     else:
-        num_spots = np.random.randint(num_spots_range[0], num_spots_range[1] + 1)
+        num_spots = rng.integers(num_spots_range[0], num_spots_range[1] + 1)
 
     for _ in range(num_spots):
         # Random position
-        y = np.random.randint(0, height)
-        x = np.random.randint(0, width)
+        y = rng.integers(0, height)
+        x = rng.integers(0, width)
 
         # Random size (lighter spots tend to be slightly larger)
-        sigma = np.random.uniform(spot_size_range[0], spot_size_range[1])
+        sigma = rng.uniform(spot_size_range[0], spot_size_range[1])
 
         # Random intensity variation (70% to 100% of specified intensity)
-        intensity = spot_intensity * np.random.uniform(0.7, 1.0)
+        intensity = spot_intensity * rng.uniform(0.7, 1.0)
 
         # Create Gaussian spot
         y_grid, x_grid = np.ogrid[:height, :width]
@@ -207,7 +207,7 @@ def add_fine_texture(
     background: np.ndarray,
     texture_strength: float = 0.02,
     texture_scale: float = 1.5,
-    seed: int = None,
+    rng: np.random.Generator = None,
 ) -> np.ndarray:
     """
     Add fine texture to simulate microscopic surface variations and optical artifacts.
@@ -216,18 +216,18 @@ def add_fine_texture(
         background (np.ndarray): Input background image.
         texture_strength (float): Strength of the texture (0.0 to 1.0).
         texture_scale (float): Smoothness of texture (higher = smoother).
-        seed (int): Random seed for reproducibility. If None, uses random state.
+        rng (np.random.Generator): Random number generator. If None, creates a new one.
 
     Returns:
         np.ndarray: Background with added fine texture.
     """
-    if seed is not None:
-        np.random.seed(seed)
+    if rng is None:
+        rng = np.random.default_rng()
 
     height, width = background.shape
 
     # Create fine random texture
-    texture = np.random.randn(height, width)
+    texture = rng.standard_normal((height, width))
     texture = gaussian_filter(texture, sigma=texture_scale)
 
     # Normalize and scale
@@ -305,9 +305,8 @@ def generate_phase_contrast_background(
         np.ndarray: Complete synthetic phase contrast background.
     """
 
-    # Set seed if provided
-    if seed is not None:
-        np.random.seed(seed)
+    # Create RNG from seed
+    rng = np.random.default_rng(seed)
 
     # Step 1: Create base background with gradients
     background = create_base_background(
@@ -316,7 +315,7 @@ def generate_phase_contrast_background(
         base_brightness=base_brightness,
         gradient_strength=gradient_strength,
         perlin_scale=perlin_scale,
-        seed=seed,
+        rng=rng,
     )
 
     # Step 2: Add darker spots (debris, artifacts)
@@ -325,7 +324,7 @@ def generate_phase_contrast_background(
         num_spots_range=num_dark_spots_range,
         spot_intensity=dark_spot_intensity,
         spot_size_range=dark_spot_size_range,
-        seed=seed,
+        rng=rng,
     )
 
     # Step 3: Add lighter spots (bright artifacts, phase halos)
@@ -334,7 +333,7 @@ def generate_phase_contrast_background(
         num_spots_range=num_light_spots_range,
         spot_intensity=light_spot_intensity,
         spot_size_range=light_spot_size_range,
-        seed=seed,
+        rng=rng,
     )
 
     # Step 4: Add fine texture
@@ -342,7 +341,7 @@ def generate_phase_contrast_background(
         background=background,
         texture_strength=texture_strength,
         texture_scale=texture_scale,
-        seed=seed,
+        rng=rng,
     )
 
     # Step 5: Apply Gaussian blur to simulate optical effects
