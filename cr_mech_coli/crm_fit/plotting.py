@@ -28,19 +28,37 @@ def prediction_optimize_helper(
 
 
 def optimize_around_single_param(opt_args):
-    all_params, bounds_lower, bounds_upper, n, param_single, args, pyargs = opt_args
+    (
+        all_params,
+        bounds_lower,
+        bounds_upper,
+        n,
+        param_single,
+        args,
+        pyargs,
+        constraints,
+    ) = opt_args
 
     params_opt = list(all_params)
     b_low = list(bounds_lower)
     b_upp = list(bounds_upper)
+    constr = list(constraints)
 
     del params_opt[n]
     del b_low[n]
     del b_upp[n]
+    del constr[n]
 
+    if n + 2 == len(bounds_lower):
+        constr[-1] = 0
+
+    constraints = sp.optimize.LinearConstraint(constr, lb=0)
     bounds = [(b_low[i], b_upp[i]) for i in range(len(b_low))]
 
+    fun = np.nan
+    success = False
     x0 = params_opt
+
     if pyargs.profiles_pre_global:
         res = sp.optimize.differential_evolution(
             prediction_optimize_helper,
@@ -53,21 +71,29 @@ def optimize_around_single_param(opt_args):
             workers=1,
             popsize=5,
             mutation=(0.5, 1.5),
+            constraints=constraints,
         )
         x0 = res.x
+        fun = res.fun
+        success = res.success
 
-    res = sp.optimize.minimize(
-        prediction_optimize_helper,
-        x0=x0,
-        args=(param_single, n, *args),
-        bounds=bounds,
-        method=pyargs.profiles_method,
-        options={
-            "disp": False,
-            "maxiter": pyargs.profiles_maxiter,
-        },
-    )
-    return res.fun, res.success
+    if not pyargs.profiles_post_local_skip:
+        res = sp.optimize.minimize(
+            prediction_optimize_helper,
+            x0=x0,
+            args=(param_single, n, *args),
+            bounds=bounds,
+            method=pyargs.profiles_method,
+            options={
+                "disp": False,
+                "maxiter": pyargs.profiles_maxiter,
+            },
+            constraints=constraints,
+        )
+        fun = res.fun
+        success = res.success
+
+    return fun, success
 
 
 def fill_confidence_levels(x, y, ax, fill=True, thresholds=[0.68, 0.90, 0.95]):
@@ -116,7 +142,7 @@ def plot_profile_from_data(
     y = y[sorter]
 
     ax.set_title(name)
-    ax.set_ylabel("PL(θ) - L(θ)")
+    ax.set_ylabel(f"PL({short}) - L(θ)")
     ax.set_xlabel(f"{short} [{units}]")
     ax.scatter(
         p_fixed,
@@ -166,7 +192,9 @@ def plot_profile_from_data(
     return x, y
 
 
-def calculate_profile(n, x, name, n_workers, optimization_result, infos, args, pyargs):
+def calculate_profile(
+    n, x, name, n_workers, optimization_result, infos, args, pyargs, constraints
+):
     pool_args = [
         (
             optimization_result.params,
@@ -176,6 +204,7 @@ def calculate_profile(n, x, name, n_workers, optimization_result, infos, args, p
             p,
             args,
             pyargs,
+            constraints,
         )
         for p in x
     ]
@@ -205,6 +234,7 @@ def plot_profile(
     bound_lower = infos.bounds_lower[n]
     bound_upper = infos.bounds_upper[n]
     param_info = infos.parameter_infos[n]
+    constraints = np.array(settings.get_constraints(positions_all.shape[1]))
 
     if fig_ax is None:
         fig_ax = plt.subplots(figsize=(8, 8))
@@ -225,7 +255,7 @@ def plot_profile(
     except:
         x = np.linspace(bound_lower, bound_upper, pyargs.profiles_samples)
         y, filt = calculate_profile(
-            n, x, name, n_workers, optimization_result, infos, args, pyargs
+            n, x, name, n_workers, optimization_result, infos, args, pyargs, constraints
         )
         np.savetxt(odir / f"profile-{savename}", y)
         np.save(odir / f"profile-{savename}-params", x)
@@ -351,12 +381,13 @@ def plot_morse_potential(
     fig_ax,
     ls,
     label=None,
+    yoffset=0,
 ):
     def morse_potential(x, r, potential_stiffness, cutoff):
         t = 1 - np.exp(-potential_stiffness * (x - r))
         c = x <= cutoff
         n_last = np.argmax(1 - c)
-        y = strength * t**2
+        y = strength * t**2 + yoffset
         return y * c + (1 - c) * y[n_last], n_last
 
     if fig_ax is None:

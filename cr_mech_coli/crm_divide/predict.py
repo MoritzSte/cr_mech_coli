@@ -173,12 +173,7 @@ def objective_function(
                 resolution,
                 delta_angle=np.float32(np.pi / 8.0),
             )
-            for iter in tqdm(
-                iterations_simulation if return_all else iters_filtered,
-                total=len(iterations_simulation if return_all else iters_filtered),
-                desc="Render predicted Masks",
-                disable=not show_progressbar,
-            )
+            for iter in (iterations_simulation if return_all else iters_filtered)
         ]
     except ValueError:
         if print_costs:

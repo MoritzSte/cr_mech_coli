@@ -1,21 +1,21 @@
 [constants]
 t_max=17.5
 dt=0.002
-domain_size=[25.6, 19.2]
+domain_size=[51.2, 38.4]
 n_voxels=[1, 1]
 rng_seed=0
-cutoff=10.0
+cutoff=20.0
 n_vertices=8
-displacement_error = 0.15
+displacement_error = 0.3
 
 [parameters]
-radius = { min = 0.0015, max=0.5, initial=0.25, individual=false }
+radius = { min = 0.003, max=1.0, initial=0.5, individual=false }
 # radius = 0.48
-rigidity = 8.3
+rigidity = 16.6
 spring_tension = 15.0
 # damping = { min=0.0, max=60.0, initial=1.0 }
 damping = 1.0
-strength = { min=0.0, max=0.0125, initial=0.075 }
+strength = { min=0.0, max=0.05, initial=0.3 }
 # strength = 0.4
 growth_rate = { min=0.0, max=0.08, initial=0.016, individual=true }
 
@@ -25,7 +25,7 @@ growth_rate = { min=0.0, max=0.08, initial=0.016, individual=true }
 # bound = 100.0
 
 [parameters.potential_type.Morse]
-potential_stiffness = { min=0.0, max=30.0, initial=1.0 }
+potential_stiffness = { min=0.0, max=15.0, initial=0.5 }
 
 # [optimization.lhs_nelder_mead]
 # max_iter = 3000
@@ -40,5 +40,8 @@ seed = 0
 max_iter = 400
 pop_size = 40
 recombination = 0.7
-polish = true
 mutation = [0.5, 1.5]
+
+[optimization.differential_evolution.polish]
+method = "COBYQA"
+max_iter = 100

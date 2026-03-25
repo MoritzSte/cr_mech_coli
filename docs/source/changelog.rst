@@ -1,6 +1,16 @@
 Changelog
 #########
 
+cr_mech_coli 0.10.0 `(13.03.2026) <_static/changelog/0.10.0.diff>`_
+-----------------------------------------------------------------
+
+- Improve documentation of Rust code
+- Added image generation capabilities
+    - New :ref:`crm_gen` script
+    - New :ref:`crm_gen` module
+- Remove secondary paper previously tracked in repository
+- Add docstrings for scripts
+
 cr_mech_coli 0.9.0 `(30.12.2025) <_static/changelog/0.9.0.diff>`_
 -----------------------------------------------------------------
 

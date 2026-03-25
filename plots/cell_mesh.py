@@ -136,6 +136,8 @@ def plot_3d_grid(points, radius):
     plotter.camera.tight(padding=0)
     plotter.camera.position = (*plotter.camera.position[:2], 100 * domain_size)
     plotter.clear_actors()
+    axes = pv.AxesAssembly(shaft_radius=0.05)
+    pv.Plotter.add_orientation_widget(plotter, axes, viewport=(0.7, 0.0, 1.0, 0.3))
 
     def add_mesh(mesh, color="white", edge_color="black"):
         plotter.add_mesh(

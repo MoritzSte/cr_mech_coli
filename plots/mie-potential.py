@@ -39,13 +39,23 @@ if __name__ == "__main__":
     fig_ax = None
     for sti, ls in data2:
         label = f"ω={sti:3.1f}/(R$_1$+R$_2$)"
-        f = crm_fit.plot_morse_potential(x, 1, sti, 1, cutoff, fig_ax, ls, label=label)
+        f = crm_fit.plot_morse_potential(
+            x,
+            1,
+            sti,
+            1,
+            cutoff,
+            fig_ax,
+            ls,
+            label=label,
+            yoffset=-1,
+        )
         fig_ax = (f[0], f[1])
     fig, ax = fig_ax
 
     ax.set_xlim(0, np.max(x))
-    xmin = 0
-    xmax = 5
+    xmin = -1
+    xmax = 4
     dx = 0.05 * (xmax - xmin)
     ax.set_ylim(xmin - dx, xmax + dx)
     ax.legend()

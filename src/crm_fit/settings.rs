@@ -305,6 +305,27 @@ impl PotentialType {
     }
 }
 
+/// Polishing options for the :class:`DifferentialEvolution` method
+#[pyclass(get_all, set_all, module = "cr_mech_coli.crm_fit")]
+#[derive(Clone, Debug, Serialize, Deserialize, AbsDiffEq, PartialEq)]
+#[approx(epsilon_type = f32)]
+pub struct Polish {
+    #[serde(default = "default_polish_method")]
+    #[approx(equal)]
+    method: String,
+    #[serde(default = "default_polish_max_iter")]
+    #[approx(equal)]
+    max_iter: usize,
+}
+
+fn default_polish_method() -> String {
+    "COBYQA".to_string()
+}
+
+fn default_polish_max_iter() -> usize {
+    100
+}
+
 /// Parameters to control optimization scheme via the `differential_evolution` algorithm.
 #[pyclass(get_all, set_all, module = "cr_mech_coli.crm_fit")]
 #[derive(Clone, Debug, Serialize, Deserialize, AbsDiffEq, PartialEq)]
@@ -333,9 +354,12 @@ pub struct DifferentialEvolution {
     #[serde(default = "default_mutation")]
     pub mutation: (f32, f32),
     /// Determines if the final result should be polished
+    // #[approx(equal)]
+    // #[serde(default = "default_polish")]
+    // pub polish: bool,
     #[approx(equal)]
-    #[serde(default = "default_polish")]
-    pub polish: bool,
+    #[serde(default)]
+    pub polish: Option<Polish>,
 }
 
 /// Parameters to control optimization scheme via an incremental lowering with the Latin-Hypercube algorithm.
@@ -403,10 +427,6 @@ pub(crate) const fn default_recombination() -> f32 {
 
 pub(crate) const fn default_mutation() -> (f32, f32) {
     (0.5, 1.5)
-}
-
-pub(crate) const fn default_polish() -> bool {
-    false
 }
 
 /// Contains all constants of the numerical simulation
@@ -591,6 +611,44 @@ impl Settings {
         ))
     }
 
+    /// Get constraints for the optimization problem
+    pub fn get_constraints(&self, py: Python, n_agents: usize) -> Vec<f32> {
+        let mut constraints = Vec::new();
+        let parameters = self.parameters.borrow(py);
+        macro_rules! push_if_individual(
+            ($param:ident) => {
+                if let Parameter::SampledFloat(s) = &parameters.$param {
+                    if s.individual.is_some_and(|x| x) {
+                        constraints.extend(vec![0.0; n_agents]);
+                    } else {
+                        constraints.push(0.0);
+                    }
+                }
+            };
+        );
+        push_if_individual!(radius);
+        push_if_individual!(rigidity);
+        push_if_individual!(spring_tension);
+        push_if_individual!(damping);
+        push_if_individual!(strength);
+        push_if_individual!(growth_rate);
+        if let PotentialType::Mie(Mie {
+            en: Parameter::SampledFloat(s1),
+            em: Parameter::SampledFloat(s2),
+            ..
+        }) = &parameters.potential_type
+        {
+            if s1.individual.is_some_and(|x| x) && s2.individual.is_some_and(|x| x) {
+                todo!()
+            } else {
+                constraints.push(1.0);
+                constraints.push(-1.0);
+            }
+        }
+
+        constraints
+    }
+
     /// Converts the settings provided to a :class:`Configuration` object required to run the
     /// simulation
     pub fn to_config(&self, py: Python) -> PyResult<crate::Configuration> {
@@ -717,7 +775,7 @@ impl Settings {
         append_infos_bounds!(rigidity, "Rigidity", "µm/min", "κ");
         append_infos_bounds!(spring_tension, "Spring Tension", "1/min²", "γ");
         append_infos_bounds!(damping, "Damping", "1/min", "λ");
-        append_infos_bounds!(strength, "Strength", "µm^2/min^2", "C");
+        append_infos_bounds!(strength, "Strength", "µm^2/min^2", "V$_0$");
         append_infos_bounds!(growth_rate, "Growth Rate", "1/min", "µ");
         match potential_type {
             PotentialType::Mie(mie) => {
@@ -971,7 +1029,10 @@ mod test {
                         pop_size: default_pop_size(),
                         recombination: default_recombination(),
                         mutation: default_mutation(),
-                        polish: default_polish(),
+                        polish: Some(Polish {
+                            method: "HansWurst".to_string(),
+                            max_iter: 122,
+                        }),
                     }),
                 )?,
                 others: Some(Py::new(py, Others { progressbar: None })?),
@@ -1003,6 +1064,10 @@ bound = 8.0
 [optimization.differential_evolution]
 seed = 0
 tol = 1e-3
+
+[optimization.differential_evolution.polish]
+method = 'HansWurst'
+max_iter = 122
 
 [others]
 # progressbar = false

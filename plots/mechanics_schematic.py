@@ -45,9 +45,9 @@ def plot_polygon_with_arrows(points, radius, angle_circle_size=0.8):
     __plot_cell_envelope(ax, points, radius)
 
     ax.scatter(points[:, 0], points[:, 1], s=80, marker="+", color="k")
-    ax.text(*(points[0] + np.array([-0.2, 0.2])), "$\\vec x_{}$".format(0))
+    ax.text(*(points[0] + np.array([-0.2, 0.2])), "$\\mathbf x_{}$".format(0))
     ax.text(
-        *(points[-1] + np.array([-0.2, 0.2])), "$\\vec x_{}$".format(len(points) - 1)
+        *(points[-1] + np.array([-0.2, 0.2])), "$\\mathbf x_{}$".format(len(points) - 1)
     )
 
     __plot_cell_springs(ax, points)
@@ -81,7 +81,7 @@ def plot_polygon_with_arrows(points, radius, angle_circle_size=0.8):
         )
         ax.text(
             *(p2 + text_pos),
-            "$\\vec x_{}$".format(i),
+            "$\\mathbf x_{}$".format(i),
             verticalalignment="center",
             horizontalalignment="center",
         )
@@ -141,11 +141,15 @@ def plot_cells_interacting(points1, points2, radius):
     __plot_cell_springs(ax, points1)
     __plot_cell_springs(ax, points2)
 
-    for p in points1:
-        closest = _closest_point_on_polygon(p, points2)
-        x = [p[0], closest[0]]
-        y = [p[1], closest[1]]
-        ax.plot(x, y, c=crm.plotting.COLOR5, linestyle="--")
+    for i, p in enumerate(points1):
+        for pi1, pi2 in zip(points2[1:], points2[:-1]):
+            closest = np.array(_closest_point_on_segment(p, pi1, pi2)[1])
+            # Plot partial if i != 3
+            alpha = 0.3 if i != 3 else 1.0
+            # closest = np.array(p) + 0.3 * (closest - p)
+            x = [p[0], closest[0]]
+            y = [p[1], closest[1]]
+            ax.plot(x, y, c=crm.plotting.COLOR5, linestyle="--", alpha=alpha)
 
     ax.scatter(points[:, 0], points[:, 1], s=80, marker="+", color="k")
 

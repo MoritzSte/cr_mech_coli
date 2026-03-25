@@ -2,21 +2,21 @@
 # t_max=275.0
 t_max=74.375
 dt=0.002
-domain_size=[25.6, 19.2]
+domain_size=[51.2, 38.4]
 n_voxels=[4, 3]
 rng_seed=0
-cutoff=10.0
+cutoff=20.0
 n_vertices=8
-displacement_error = 0.25
+displacement_error = 0.5
 
 [parameters]
-radius = { min = 0.0015, max=0.5, initial=0.25, individual=false }
+radius = { min = 0.003, max=1.0, initial=0.5, individual=false }
 # radius = [5.630516, 5.445153, 4.7796803, 5.580657, 5.963134, 6.2007318]
-rigidity = 20.0
+rigidity = 40.0
 # rigidity = { min = 5.0, max = 16.0, initial=10.0, individual=false }
 # damping = { min=0.0, max=60.0, initial=12.5 }
 damping = 2.0
-strength = { min=0.0, max=15.0, initial=0.075 }
+strength = { min=0.0, max=60.0, initial=0.3 }
 spring_tension = 40.0
 # growth_rate = [0.00842039, 0.0128359,  0.01364351, 0.01530663, 0.01944372, 0.01396576]
 growth_rate = { min=0.0, max=0.08, initial=0.016, individual=true }
@@ -27,7 +27,7 @@ growth_rate = { min=0.0, max=0.08, initial=0.016, individual=true }
 # bound = 100.0
 
 [parameters.potential_type.Morse]
-potential_stiffness = { min=0.0, max=10.0, initial=1.0 }
+potential_stiffness = { min=0.0, max=5.0, initial=0.5 }
 # strength = { min=0.0, max=30.0, initial=1.0 }
 
 # [optimization.lhs_nelder_mead]

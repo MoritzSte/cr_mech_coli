@@ -237,6 +237,12 @@ def crm_fit_main():
         help="Perform a pre-optimization with the differential_evolution algorithm before locally minimizing.",
     )
     parser.add_argument(
+        "--profiles-post-local-skip",
+        default=False,
+        action="store_true",
+        help="Perform a local minimization with a specified optimization routine",
+    )
+    parser.add_argument(
         "--profiles-pre-maxiter",
         type=int,
         default=20,

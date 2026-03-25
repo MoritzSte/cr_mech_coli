@@ -1,6 +1,6 @@
 [package]
 name = "cr_mech_coli"
-version = "0.9.1"
+version = "0.10.0"
 resolver = "2"
 edition = "2021"
 exclude = ["paper", "paper_segmentation_tracking", "data", "docs", "omnipose", "plots"]

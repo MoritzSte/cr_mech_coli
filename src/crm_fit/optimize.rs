@@ -175,9 +175,7 @@ pub fn run_optimizer(
         bounds_lower,
         bounds_upper,
         initial_values,
-        parameter_infos: _,
-        constants: _,
-        constant_infos: _,
+        ..
     } = oinfs;
     let n_workers = if n_workers <= 0 {
         rayon::max_num_threads()
@@ -206,6 +204,10 @@ pub fn run_optimizer(
             locals.set_item("positions_all", positions_all.to_pyarray(py))?;
             locals.set_item("iterations_images", iterations_images)?;
             locals.set_item("settings", settings.clone().into_pyobject(py)?)?;
+            locals.set_item(
+                "constraints",
+                settings.get_constraints(py, n_agents).into_pyobject(py)?,
+            )?;
 
             // Optional
             locals.set_item("optimization", de.clone().into_pyobject(py)?)?;
@@ -215,6 +217,7 @@ pub fn run_optimizer(
                 pyo3::ffi::c_str!(
                     r#"
 import scipy as sp
+import numpy as np
 from cr_mech_coli.crm_fit import predict_calculate_cost
 
 args = (positions_all, iterations_images, settings)
@@ -225,6 +228,9 @@ def callback(intermediate_result):
     fun = intermediate_result.fun
     global evals
     evals.append(float(fun))
+
+A = np.array(constraints)
+c = sp.optimize.LinearConstraint(A, lb=0)
 
 res = sp.optimize.differential_evolution(
     predict_calculate_cost,
@@ -238,11 +244,26 @@ res = sp.optimize.differential_evolution(
     tol=optimization.tol,
     recombination=optimization.recombination,
     popsize=optimization.pop_size,
-    polish=optimization.polish,
+    polish=False,
     rng=optimization.seed,
     callback=callback,
     mutation=optimization.mutation,
+    constraints=c,
 )
+
+if optimization.polish is not None:
+    res = sp.optimize.minimize(
+        predict_calculate_cost,
+        bounds=bounds,
+        x0=res.x,
+        args=args,
+        method=optimization.polish.method,
+        options={
+            "disp": True,
+            "maxiter": optimization.polish.max_iter,
+        },
+        constraints=c,
+    )
 "#
                 ),
                 Some(&globals),

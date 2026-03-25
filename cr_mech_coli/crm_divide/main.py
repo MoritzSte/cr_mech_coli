@@ -84,11 +84,11 @@ def plot_mask_adjustment(
     numerically generated results can be compared directly.
     To do this, the tree of the numerical simulation needs to be matched to the tree of the data.
     """
-    radius = 0.2050713645353225423
-    strength = 0.0025
+    radius = 0.4782565
+    strength = 0.01
     # en = 6.0
     # em = 0.5
-    potential_stiffness = 2.0
+    potential_stiffness = 1.0
     # damping = 2.0
     growth_rates = [
         0.005995107,
@@ -98,7 +98,7 @@ def plot_mask_adjustment(
         0.007861354,
         0.008311217,
     ]
-    spring_length_thresholds = [0.4, 0.4, 0.45, 0.45]
+    spring_length_thresholds = [0.8, 0.8, 0.9, 0.9]
     new_growth_rates = [0.001] * 8
     x0 = [
         radius,
@@ -212,44 +212,69 @@ def plot_time_evolution(
     iterations_data,
     settings,
     output_dir,
+    final_parameters,
+    args,
 ):
     fig, ax = plt.subplots(figsize=(8, 8))
     crm.plotting.configure_ax(ax)
 
-    for color, parent_penalty in [
-        (crm.plotting.COLOR1, 0),
-        (crm.plotting.COLOR2, 0.5),
-        (crm.plotting.COLOR3, 1.0),
-    ]:
-        penalties = [
-            crm.penalty_area_diff_account_parents(
-                new_mask,
-                masks_predicted[iter][0],
-                color_to_cell,
-                parent_map,
-                parent_penalty,
+    def plot_result(
+        masks_predicted,
+        color_to_cell,
+        parent_map,
+        configs=[
+            (0, crm.plotting.COLOR1, "0.0"),
+            (0.5, crm.plotting.COLOR2, "0.5"),
+            (1.0, crm.plotting.COLOR3, "1.0"),
+        ],
+    ):
+        for parent_penalty, color, name in configs:
+            penalties = [
+                crm.penalty_area_diff_account_parents(
+                    new_mask,
+                    masks_predicted[iter][0],
+                    color_to_cell,
+                    parent_map,
+                    parent_penalty,
+                )
+                for iter, new_mask in zip(iterations_data, new_masks)
+            ]
+            ax.plot(
+                np.array([iterations_simulation[i] for i in iterations_data])
+                * settings.constants.dt,
+                penalties,
+                marker="x",
+                color=color,
+                label=f"p={name}",
             )
-            for iter, new_mask in tqdm(
-                zip(iterations_data, new_masks),
-                total=len(new_masks),
-                desc="Calculating penalties",
-            )
-        ]
-        ax.plot(
-            np.array([iterations_simulation[i] for i in iterations_data])
-            * settings.constants.dt,
-            penalties,
-            marker="x",
-            color=color,
-            label=f"p={parent_penalty}",
-        )
+
+    ax.axvline(x=40.0, color="gray", linestyle="--", alpha=0.8)
+    ax.ticklabel_format(axis="y", style="sci", scilimits=(-3, -3))
+
+    plot_result(
+        masks_predicted,
+        color_to_cell,
+        parent_map,
+        configs=[(1.0, crm.plotting.COLOR5, "1.0 Optimized")],
+    )
+
+    # Generate new results with increased growth rate to showcase difference
+    # Modify growth rates such that they are 10% too large
+    params_mod = np.array(final_parameters)
+    params_mod[3:8] *= 1.2
+    params_mod[12:] *= 1.2
+    (_, masks_predicted_2, color_to_cell_2, parent_map_2, _) = (
+        objective_function_return_all(params_mod, *args, show_progressbar=True)
+    )
+    plot_result(masks_predicted_2, color_to_cell_2, parent_map_2)
 
     ax.legend(
         loc="upper center",
-        bbox_to_anchor=(0.5, 1.1),
-        ncol=3,
+        bbox_to_anchor=(0.5, 1.17),
+        ncol=2,
         frameon=False,
     )
+
     ax.set_ylabel("Cost Function")
     ax.set_xlabel("Time [h]")
     fig.savefig(output_dir / "time-evolution.pdf")
@@ -526,36 +551,13 @@ def default_parameters() -> tuple[list[float], list[tuple[float, float]]]:
         1.853940041329739385e-02,
         5.169072925677239971e-04,
     ]
-    x0 = [
-        2.050713645353225423e-01,
-        3.798458391278167201e-03,
-        1.095223170912896293e01,
-        7.340484653494815104e-03,
-        5.983537936575702987e-03,
-        9.199234242500513303e-03,
-        1.258385848317429903e-02,
-        9.111606891670301356e-03,
-        9.419760459145443132e-03,
-        3.011383565349040614e-01,
-        3.279595378600909106e-01,
-        2.971916703593225351e-01,
-        2.838587848180676443e-01,
-        3.230658553125494159e-03,
-        1.258922850097723284e-02,
-        1.794461648761763728e-02,
-        4.761491437329616605e-03,
-        5.241558679868058013e-03,
-        1.161985425461459394e-03,
-        1.853940041329739385e-02,
-        5.169072925677239971e-04,
-    ]
     bounds = [
         # Radius
-        (0.0015, 0.5),
+        (0.003, 1.0),
         # Strength
-        (0.0, 0.02),
+        (0.0, 0.6),
         # Potential Stiffness
-        (0.2, 40.0),
+        (0.0, 15.0),
         # Growth rates
         (0.0000, 0.1),
         (0.0000, 0.1),
@@ -564,10 +566,10 @@ def default_parameters() -> tuple[list[float], list[tuple[float, float]]]:
         (0.0000, 0.1),
         (0.0000, 0.1),
         # Spring length thresholds
-        (0.1, 1.0),
-        (0.1, 1.0),
-        (0.1, 1.0),
-        (0.1, 1.0),
+        (0.2, 2.0),
+        (0.2, 2.0),
+        (0.2, 2.0),
+        (0.2, 2.0),
         # new growth rates
         (0.0000, 0.1),
         (0.0000, 0.1),
@@ -799,6 +801,8 @@ def crm_divide_main():
                 iterations_data,
                 settings,
                 output_dir,
+                final_parameters,
+                args,
             )
 
     if not pyargs.skip_profiles:

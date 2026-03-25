@@ -1,0 +1,863 @@
+ .github/workflows/test.yml                         |    2 +-
+ .gitmodules                                        |    3 -
+ Cargo.lock                                         |  232 +-
+ Cargo.toml                                         |   10 +-
+ cr_mech_coli/__init__.py                           |   37 +-
+ cr_mech_coli/crm_amir/__init__.py                  |   35 +-
+ cr_mech_coli/crm_amir/main.py                      |    1 -
+ cr_mech_coli/crm_divide/__init__.py                |   56 +
+ cr_mech_coli/crm_divide/main.py                    |  961 ++------
+ cr_mech_coli/crm_divide/optimize.py                |  187 ++
+ cr_mech_coli/crm_divide/predict.py                 |  266 +++
+ cr_mech_coli/crm_fit/__init__.py                   |   52 +-
+ cr_mech_coli/crm_fit/plotting.py                   |    2 -
+ cr_mech_coli/crm_gen/__init__.py                   |   82 +
+ cr_mech_coli/crm_gen/background.py                 |  355 +++
+ cr_mech_coli/crm_gen/bacteria.py                   |  434 ++++
+ cr_mech_coli/crm_gen/config.py                     |   73 +
+ .../crm_gen/configs/default_fit_config.toml        |   36 +
+ .../crm_gen/configs/default_gen_config.toml        |  106 +
+ cr_mech_coli/crm_gen/filters.py                    |  760 ++++++
+ cr_mech_coli/crm_gen/main.py                       |  463 ++++
+ cr_mech_coli/crm_gen/metrics.py                    |  359 +++
+ cr_mech_coli/crm_gen/optimization.py               |  905 ++++++++
+ cr_mech_coli/crm_gen/pipeline.py                   |  794 +++++++
+ cr_mech_coli/crm_gen/scene.py                      |  451 ++++
+ cr_mech_coli/crm_gen/visualization.py              |  459 ++++
+ cr_mech_coli/crm_gen_data/__init__.py              |    8 -
+ cr_mech_coli/crm_gen_data/main.py                  |   68 -
+ cr_mech_coli/crm_multilayer/__init__.py            |   22 +
+ cr_mech_coli/crm_multilayer/main.py                |    4 -
+ cr_mech_coli/crm_perf_plots.py                     |   20 +-
+ data/crm_divide/0001/settings.toml                 |   16 +-
+ data/crm_divide/test/settings.toml                 |   28 +-
+ data/crm_fit/mie_all/settings.toml                 |   14 +-
+ data/crm_fit/mie_partial/settings.toml             |   14 +-
+ data/crm_fit/morse_all/settings.toml               |   14 +-
+ data/crm_fit/morse_partial/settings.toml           |   14 +-
+ docker.sh                                          |    7 +
+ docs/requirements.txt                              |    6 +-
+ docs/source/_static/changelog/0.9.0.diff           | 1017 ++++++++
+ .../computation-time-with-initial-agents.pdf       |  Bin 19706 -> 18854 bytes
+ .../computation-time-with-initial-agents.png       |  Bin 88896 -> 93017 bytes
+ docs/source/changelog.rst                          |   28 +-
+ docs/source/documentation/crm_gen/background.rst   |    9 +
+ docs/source/documentation/crm_gen/bacteria.rst     |    9 +
+ .../source/documentation/crm_gen/configuration.rst |    9 +
+ docs/source/documentation/crm_gen/filters.rst      |    9 +
+ docs/source/documentation/crm_gen/index.rst        |   74 +
+ docs/source/documentation/crm_gen/metrics.rst      |    9 +
+ docs/source/documentation/crm_gen/optimization.rst |    9 +
+ docs/source/documentation/crm_gen/pipeline.rst     |    9 +
+ docs/source/documentation/crm_gen/scene.rst        |    9 +
+ .../source/documentation/crm_gen/visualization.rst |    8 +
+ docs/source/documentation/index.rst                |   19 +-
+ docs/source/fitting-methods.rst                    |   75 +-
+ docs/source/image-generation.rst                   |  101 +-
+ docs/source/index.rst                              |    1 -
+ docs/source/performance.rst                        |   13 -
+ docs/source/references.rst                         |    9 +-
+ docs/source/scripts/crm_amir.rst                   |    1 +
+ docs/source/scripts/crm_divide.rst                 |    8 +
+ docs/source/scripts/crm_gen.rst                    |   72 +
+ docs/source/scripts/crm_gen_data.rst               |    4 -
+ docs/source/scripts/crm_multilayer.rst             |    5 -
+ docs/source/scripts/crm_perf_plots.rst             |   14 +-
+ docs/source/scripts/index.rst                      |    2 +-
+ omnipose                                           |    1 -
+ .../2007-youtube/growth-rates-bar-plot.pdf         |  Bin 15741 -> 0 bytes
+ .../2007-youtube/growth-rates-bar-plot.png         |  Bin 20422 -> 0 bytes
+ .../2007-youtube/growth-rates-with-uncert.pdf      |  Bin 28032 -> 0 bytes
+ .../2007-youtube/growth-rates-with-uncert.png      |  Bin 108065 -> 0 bytes
+ .../2007-youtube/growth_rates.csv                  |    8 -
+ .../2007-youtube/parameter-distribution.pdf        |  Bin 22542 -> 0 bytes
+ .../2007-youtube/parameter-distribution.png        |  Bin 90973 -> 0 bytes
+ .../2007-youtube/rod-lengths-average.pdf           |  Bin 18363 -> 0 bytes
+ .../2007-youtube/rod-lengths-average.png           |  Bin 68410 -> 0 bytes
+ .../2007-youtube/rod-lengths-individual.pdf        |  Bin 19153 -> 0 bytes
+ .../2007-youtube/rod-lengths-individual.png        |  Bin 156024 -> 0 bytes
+ .../IWF-Goettingen/growth_rates.csv                |    6 -
+ .../pixel-count/growth-rates-bar-plot.pdf          |  Bin 15183 -> 0 bytes
+ .../pixel-count/growth-rates-bar-plot.png          |  Bin 18950 -> 0 bytes
+ .../pixel-count/growth-rates-with-uncert.pdf       |  Bin 25347 -> 0 bytes
+ .../pixel-count/growth-rates-with-uncert.png       |  Bin 90972 -> 0 bytes
+ .../IWF-Goettingen/pixel-count/growth_rates.csv    |    6 -
+ .../pixel-count/parameter-distribution.pdf         |  Bin 21603 -> 0 bytes
+ .../pixel-count/parameter-distribution.png         |  Bin 65119 -> 0 bytes
+ .../pixel-count/rod-lengths-average.pdf            |  Bin 17139 -> 0 bytes
+ .../pixel-count/rod-lengths-average.png            |  Bin 55128 -> 0 bytes
+ .../pixel-count/rod-lengths-individual.pdf         |  Bin 18159 -> 0 bytes
+ .../pixel-count/rod-lengths-individual.png         |  Bin 103267 -> 0 bytes
+ .../positions/growth-rates-bar-plot.pdf            |  Bin 14575 -> 0 bytes
+ .../positions/growth-rates-bar-plot.png            |  Bin 18290 -> 0 bytes
+ .../positions/growth-rates-with-uncert.pdf         |  Bin 26083 -> 0 bytes
+ .../positions/growth-rates-with-uncert.png         |  Bin 91009 -> 0 bytes
+ .../IWF-Goettingen/positions/growth_rates.csv      |    6 -
+ .../positions/parameter-distribution.pdf           |  Bin 22021 -> 0 bytes
+ .../positions/parameter-distribution.png           |  Bin 76048 -> 0 bytes
+ .../positions/rod-lengths-average.pdf              |  Bin 17913 -> 0 bytes
+ .../positions/rod-lengths-average.png              |  Bin 58379 -> 0 bytes
+ .../positions/rod-lengths-individual.pdf           |  Bin 16145 -> 0 bytes
+ .../positions/rod-lengths-individual.png           |  Bin 107196 -> 0 bytes
+ paper.bib                                          |  554 +++++
+ paper.md                                           |  470 ++++
+ paper/.gitignore                                   |   15 -
+ paper/Makefile                                     |   47 -
+ paper/README.md                                    |   10 -
+ paper/arxiv.sty                                    |  263 ---
+ paper/docs                                         |    1 -
+ paper/figures/amir-elastic-000032-wider.png        |  Bin 215236 -> 0 bytes
+ paper/figures/amir-elastic-000032-with-axes.png    |  Bin 427560 -> 0 bytes
+ paper/figures/amir-elastic-000032-with-axes.svg    |  200 --
+ paper/figures/concept/overview.tex                 |   64 -
+ paper/figures/concept/visualization.tex            |   33 -
+ paper/figures/crm_amir/0000000000.png              |  Bin 132847 -> 0 bytes
+ paper/figures/crm_amir/0000000001.png              |  Bin 142265 -> 0 bytes
+ paper/figures/crm_amir/0000000002.png              |  Bin 153007 -> 0 bytes
+ paper/figures/crm_amir/0000000003.png              |  Bin 170541 -> 0 bytes
+ paper/figures/crm_amir/0000000004.png              |  Bin 189169 -> 0 bytes
+ paper/figures/crm_amir/0000000005.png              |  Bin 217148 -> 0 bytes
+ paper/figures/crm_amir/0000000006.png              |  Bin 248132 -> 0 bytes
+ paper/figures/crm_amir/0000000007.png              |  Bin 288484 -> 0 bytes
+ paper/figures/crm_amir/0000000008.png              |  Bin 329973 -> 0 bytes
+ paper/figures/crm_amir/0000000009.png              |  Bin 369192 -> 0 bytes
+ paper/figures/crm_amir/0000000010.png              |  Bin 414850 -> 0 bytes
+ .../figures/crm_amir/profiles-full/0000000000.png  |  Bin 28410 -> 0 bytes
+ .../figures/crm_amir/profiles-full/0000000001.png  |  Bin 30710 -> 0 bytes
+ .../figures/crm_amir/profiles-full/0000000002.png  |  Bin 30818 -> 0 bytes
+ .../crm_amir/profiles-full/cost-contributions.png  |  Bin 29828 -> 0 bytes
+ .../crm_amir/profiles-full/fit-comparison.png      |  Bin 34320 -> 0 bytes
+ paper/figures/crm_amir/profiles-full/popt.csv      |    6 -
+ paper/figures/crm_amir/profiles-full/profiles.csv  |  100 -
+ paper/figures/crm_amir/profiles-full/samples.csv   |  100 -
+ .../crm_amir/profiles-reduced/0000000000.png       |  Bin 28410 -> 0 bytes
+ .../crm_amir/profiles-reduced/0000000001.png       |  Bin 30705 -> 0 bytes
+ .../crm_amir/profiles-reduced/0000000002.png       |  Bin 30825 -> 0 bytes
+ .../profiles-reduced/cost-contributions.png        |  Bin 29823 -> 0 bytes
+ .../crm_amir/profiles-reduced/fit-comparison.png   |  Bin 34303 -> 0 bytes
+ paper/figures/crm_amir/profiles-reduced/popt.csv   |    5 -
+ .../figures/crm_amir/profiles-reduced/profiles.csv |  100 -
+ .../figures/crm_amir/profiles-reduced/samples.csv  |  100 -
+ .../crm_amir/profiles/damping-spring_tension.png   |  Bin 62926 -> 0 bytes
+ paper/figures/crm_amir/profiles/damping.png        |  Bin 41826 -> 0 bytes
+ .../profiles/damping_to_spring_tension_ratio.png   |  Bin 46093 -> 0 bytes
+ paper/figures/crm_amir/profiles/drag_force.png     |  Bin 55719 -> 0 bytes
+ paper/figures/crm_amir/profiles/growth_rate.png    |  Bin 71388 -> 0 bytes
+ paper/figures/crm_amir/profiles/rod_rigidity.png   |  Bin 60190 -> 0 bytes
+ paper/figures/crm_amir/profiles/spring_tension.png |  Bin 61681 -> 0 bytes
+ .../figures/crm_amir/progressions/step1-000010.png |  Bin 374888 -> 0 bytes
+ .../figures/crm_amir/progressions/step1-000017.png |  Bin 371099 -> 0 bytes
+ .../figures/crm_amir/progressions/step1-000034.png |  Bin 380560 -> 0 bytes
+ .../figures/crm_amir/progressions/step2-000010.png |  Bin 8406 -> 0 bytes
+ .../figures/crm_amir/progressions/step2-000017.png |  Bin 8174 -> 0 bytes
+ .../figures/crm_amir/progressions/step2-000034.png |  Bin 8225 -> 0 bytes
+ .../figures/crm_amir/progressions/step3-000010.png |  Bin 5514 -> 0 bytes
+ .../figures/crm_amir/progressions/step3-000017.png |  Bin 5621 -> 0 bytes
+ .../figures/crm_amir/progressions/step3-000034.png |  Bin 5519 -> 0 bytes
+ .../figures/crm_amir/progressions/step4-000010.png |  Bin 379128 -> 0 bytes
+ .../figures/crm_amir/progressions/step4-000017.png |  Bin 375332 -> 0 bytes
+ .../figures/crm_amir/progressions/step4-000034.png |  Bin 384691 -> 0 bytes
+ paper/figures/crm_amir/result-1/0000000000.png     |  Bin 28410 -> 0 bytes
+ paper/figures/crm_amir/result-1/0000000001.png     |  Bin 30747 -> 0 bytes
+ paper/figures/crm_amir/result-1/0000000002.png     |  Bin 30736 -> 0 bytes
+ .../crm_amir/result-1/cost-contributions.png       |  Bin 29725 -> 0 bytes
+ paper/figures/crm_amir/result-1/fit-comparison.png |  Bin 34288 -> 0 bytes
+ paper/figures/crm_amir/result-1/popt.csv           |    6 -
+ paper/figures/crm_amir/result-1/profiles.csv       |  150 --
+ paper/figures/crm_amir/result-1/samples.csv        |  150 --
+ paper/figures/crm_amir/result-2/0000000000.png     |  Bin 28410 -> 0 bytes
+ paper/figures/crm_amir/result-2/0000000001.png     |  Bin 30785 -> 0 bytes
+ paper/figures/crm_amir/result-2/0000000002.png     |  Bin 30871 -> 0 bytes
+ .../crm_amir/result-2/cost-contributions.png       |  Bin 30474 -> 0 bytes
+ paper/figures/crm_amir/result-2/fit-comparison.png |  Bin 34144 -> 0 bytes
+ paper/figures/crm_amir/result-2/popt.csv           |    5 -
+ paper/figures/crm_amir/result-2/profiles.csv       |  150 --
+ paper/figures/crm_amir/result-2/samples.csv        |  150 --
+ paper/figures/crm_amir/result-3/0000000000.png     |  Bin 28410 -> 0 bytes
+ paper/figures/crm_amir/result-3/0000000001.png     |  Bin 30766 -> 0 bytes
+ paper/figures/crm_amir/result-3/0000000002.png     |  Bin 30841 -> 0 bytes
+ .../crm_amir/result-3/cost-contributions.png       |  Bin 30567 -> 0 bytes
+ paper/figures/crm_amir/result-3/fit-comparison.png |  Bin 34112 -> 0 bytes
+ paper/figures/crm_amir/result-3/popt.csv           |    4 -
+ paper/figures/crm_amir/result-3/profiles.csv       |  150 --
+ paper/figures/crm_amir/result-3/samples.csv        |  150 --
+ paper/figures/crm_amir/result-full/0000000000.png  |  Bin 28410 -> 0 bytes
+ paper/figures/crm_amir/result-full/0000000001.png  |  Bin 30710 -> 0 bytes
+ paper/figures/crm_amir/result-full/0000000002.png  |  Bin 30818 -> 0 bytes
+ .../crm_amir/result-full/cost-contributions.png    |  Bin 29828 -> 0 bytes
+ .../crm_amir/result-full/fit-comparison.png        |  Bin 34320 -> 0 bytes
+ paper/figures/crm_amir/result-full/popt.csv        |    6 -
+ paper/figures/crm_amir/result-full/profiles.csv    |  100 -
+ paper/figures/crm_amir/result-full/samples.csv     |  100 -
+ .../figures/crm_amir/result-reduced/0000000000.png |  Bin 28410 -> 0 bytes
+ .../figures/crm_amir/result-reduced/0000000001.png |  Bin 30769 -> 0 bytes
+ .../figures/crm_amir/result-reduced/0000000002.png |  Bin 30868 -> 0 bytes
+ .../crm_amir/result-reduced/cost-contributions.png |  Bin 30516 -> 0 bytes
+ .../crm_amir/result-reduced/fit-comparison.png     |  Bin 34135 -> 0 bytes
+ paper/figures/crm_amir/result-reduced/popt.csv     |    5 -
+ paper/figures/crm_amir/result-reduced/profiles.csv |  100 -
+ paper/figures/crm_amir/result-reduced/samples.csv  |  100 -
+ .../crm_divide/growth-rate-distribution.png        |  Bin 30630 -> 0 bytes
+ .../figures/crm_divide/mask_adjustments/000000.png |  Bin 35931 -> 0 bytes
+ .../figures/crm_divide/mask_adjustments/000001.png |  Bin 36024 -> 0 bytes
+ .../figures/crm_divide/mask_adjustments/000002.png |  Bin 36027 -> 0 bytes
+ .../figures/crm_divide/mask_adjustments/000003.png |  Bin 36007 -> 0 bytes
+ .../figures/crm_divide/mask_adjustments/000004.png |  Bin 35973 -> 0 bytes
+ .../figures/crm_divide/mask_adjustments/000005.png |  Bin 36486 -> 0 bytes
+ .../figures/crm_divide/mask_adjustments/000008.png |  Bin 36821 -> 0 bytes
+ .../figures/crm_divide/mask_adjustments/000010.png |  Bin 37401 -> 0 bytes
+ .../figures/crm_divide/mask_adjustments/000019.png |  Bin 42881 -> 0 bytes
+ .../figures/crm_divide/mask_adjustments/000020.png |  Bin 42717 -> 0 bytes
+ .../figures/crm_divide/mask_adjustments/000021.png |  Bin 43247 -> 0 bytes
+ .../figures/crm_divide/mask_adjustments/000022.png |  Bin 43293 -> 0 bytes
+ .../figures/crm_divide/mask_adjustments/000023.png |  Bin 43385 -> 0 bytes
+ paper/figures/crm_divide/masks_adjusted/000000.png |  Bin 5315 -> 0 bytes
+ paper/figures/crm_divide/masks_adjusted/000001.png |  Bin 5362 -> 0 bytes
+ paper/figures/crm_divide/masks_adjusted/000002.png |  Bin 5362 -> 0 bytes
+ paper/figures/crm_divide/masks_adjusted/000003.png |  Bin 5428 -> 0 bytes
+ paper/figures/crm_divide/masks_adjusted/000004.png |  Bin 5339 -> 0 bytes
+ paper/figures/crm_divide/masks_adjusted/000005.png |  Bin 5465 -> 0 bytes
+ paper/figures/crm_divide/masks_adjusted/000008.png |  Bin 5471 -> 0 bytes
+ paper/figures/crm_divide/masks_adjusted/000010.png |  Bin 5640 -> 0 bytes
+ paper/figures/crm_divide/masks_adjusted/000019.png |  Bin 6207 -> 0 bytes
+ paper/figures/crm_divide/masks_adjusted/000020.png |  Bin 6195 -> 0 bytes
+ paper/figures/crm_divide/masks_adjusted/000021.png |  Bin 6292 -> 0 bytes
+ paper/figures/crm_divide/masks_adjusted/000022.png |  Bin 6264 -> 0 bytes
+ paper/figures/crm_divide/masks_adjusted/000023.png |  Bin 6260 -> 0 bytes
+ paper/figures/crm_divide/masks_diff/000000.png     |  Bin 2484 -> 0 bytes
+ paper/figures/crm_divide/masks_diff/000001.png     |  Bin 2544 -> 0 bytes
+ paper/figures/crm_divide/masks_diff/000002.png     |  Bin 2487 -> 0 bytes
+ paper/figures/crm_divide/masks_diff/000003.png     |  Bin 2518 -> 0 bytes
+ paper/figures/crm_divide/masks_diff/000004.png     |  Bin 2511 -> 0 bytes
+ paper/figures/crm_divide/masks_diff/000005.png     |  Bin 2533 -> 0 bytes
+ paper/figures/crm_divide/masks_diff/000008.png     |  Bin 2687 -> 0 bytes
+ paper/figures/crm_divide/masks_diff/000010.png     |  Bin 2823 -> 0 bytes
+ paper/figures/crm_divide/masks_diff/000019.png     |  Bin 3115 -> 0 bytes
+ paper/figures/crm_divide/masks_diff/000020.png     |  Bin 3104 -> 0 bytes
+ paper/figures/crm_divide/masks_diff/000021.png     |  Bin 3132 -> 0 bytes
+ paper/figures/crm_divide/masks_diff/000022.png     |  Bin 3115 -> 0 bytes
+ paper/figures/crm_divide/masks_diff/000023.png     |  Bin 3226 -> 0 bytes
+ .../figures/crm_divide/masks_predicted/000000.png  |  Bin 5287 -> 0 bytes
+ .../figures/crm_divide/masks_predicted/000001.png  |  Bin 5201 -> 0 bytes
+ .../figures/crm_divide/masks_predicted/000002.png  |  Bin 5211 -> 0 bytes
+ .../figures/crm_divide/masks_predicted/000003.png  |  Bin 5221 -> 0 bytes
+ .../figures/crm_divide/masks_predicted/000004.png  |  Bin 5266 -> 0 bytes
+ .../figures/crm_divide/masks_predicted/000005.png  |  Bin 5306 -> 0 bytes
+ .../figures/crm_divide/masks_predicted/000006.png  |  Bin 5302 -> 0 bytes
+ .../figures/crm_divide/masks_predicted/000007.png  |  Bin 5330 -> 0 bytes
+ .../figures/crm_divide/masks_predicted/000008.png  |  Bin 5356 -> 0 bytes
+ .../figures/crm_divide/masks_predicted/000009.png  |  Bin 5396 -> 0 bytes
+ .../figures/crm_divide/masks_predicted/000010.png  |  Bin 5417 -> 0 bytes
+ .../figures/crm_divide/masks_predicted/000011.png  |  Bin 5442 -> 0 bytes
+ .../figures/crm_divide/masks_predicted/000012.png  |  Bin 5488 -> 0 bytes
+ .../figures/crm_divide/masks_predicted/000013.png  |  Bin 5549 -> 0 bytes
+ .../figures/crm_divide/masks_predicted/000014.png  |  Bin 5579 -> 0 bytes
+ .../figures/crm_divide/masks_predicted/000015.png  |  Bin 5604 -> 0 bytes
+ .../figures/crm_divide/masks_predicted/000016.png  |  Bin 5745 -> 0 bytes
+ .../figures/crm_divide/masks_predicted/000017.png  |  Bin 5856 -> 0 bytes
+ .../figures/crm_divide/masks_predicted/000018.png  |  Bin 5874 -> 0 bytes
+ .../figures/crm_divide/masks_predicted/000019.png  |  Bin 5890 -> 0 bytes
+ .../figures/crm_divide/masks_predicted/000020.png  |  Bin 5932 -> 0 bytes
+ .../figures/crm_divide/masks_predicted/000021.png  |  Bin 5966 -> 0 bytes
+ .../figures/crm_divide/masks_predicted/000022.png  |  Bin 6005 -> 0 bytes
+ .../figures/crm_divide/masks_predicted/000023.png  |  Bin 6089 -> 0 bytes
+ .../figures/crm_divide/masks_predicted/000024.png  |  Bin 6159 -> 0 bytes
+ paper/figures/crm_divide/optimize_result.csv       |   24 -
+ paper/figures/crm_divide/profile-000000.csv        |   60 -
+ paper/figures/crm_divide/profile-000001.csv        |   60 -
+ paper/figures/crm_divide/profile-000002.csv        |   60 -
+ paper/figures/crm_divide/profile-000003.csv        |   60 -
+ paper/figures/crm_divide/profile-000004.csv        |   60 -
+ paper/figures/crm_divide/profile-000005.csv        |   60 -
+ paper/figures/crm_divide/profile-000006.csv        |   60 -
+ paper/figures/crm_divide/profile-000007.csv        |   60 -
+ paper/figures/crm_divide/profile-000008.csv        |   60 -
+ paper/figures/crm_divide/profile-000009.csv        |   60 -
+ paper/figures/crm_divide/profile-000010.csv        |   60 -
+ paper/figures/crm_divide/profile-000011.csv        |   60 -
+ paper/figures/crm_divide/profile-000012.csv        |   60 -
+ paper/figures/crm_divide/profile-000013.csv        |   60 -
+ paper/figures/crm_divide/profile-000014.csv        |   60 -
+ paper/figures/crm_divide/profile-000015.csv        |   60 -
+ paper/figures/crm_divide/profile-000016.csv        |   60 -
+ paper/figures/crm_divide/profile-000017.csv        |   60 -
+ paper/figures/crm_divide/profile-000018.csv        |   60 -
+ paper/figures/crm_divide/profile-000019.csv        |   60 -
+ paper/figures/crm_divide/profile-000020.csv        |   60 -
+ paper/figures/crm_divide/profile-000021.csv        |   60 -
+ paper/figures/crm_divide/profile-000022.csv        |   60 -
+ .../figures/crm_divide/profiles/profile-000000.png |  Bin 46838 -> 0 bytes
+ .../figures/crm_divide/profiles/profile-000001.png |  Bin 52687 -> 0 bytes
+ .../figures/crm_divide/profiles/profile-000002.png |  Bin 44673 -> 0 bytes
+ .../figures/crm_divide/profiles/profile-000003.png |  Bin 40723 -> 0 bytes
+ .../figures/crm_divide/profiles/profile-000004.png |  Bin 44897 -> 0 bytes
+ .../figures/crm_divide/profiles/profile-000005.png |  Bin 42514 -> 0 bytes
+ .../figures/crm_divide/profiles/profile-000006.png |  Bin 42893 -> 0 bytes
+ .../figures/crm_divide/profiles/profile-000007.png |  Bin 41773 -> 0 bytes
+ .../figures/crm_divide/profiles/profile-000008.png |  Bin 40624 -> 0 bytes
+ .../figures/crm_divide/profiles/profile-000009.png |  Bin 47211 -> 0 bytes
+ .../figures/crm_divide/profiles/profile-000010.png |  Bin 41999 -> 0 bytes
+ .../figures/crm_divide/profiles/profile-000011.png |  Bin 37562 -> 0 bytes
+ .../figures/crm_divide/profiles/profile-000012.png |  Bin 39849 -> 0 bytes
+ .../figures/crm_divide/profiles/profile-000013.png |  Bin 41113 -> 0 bytes
+ .../figures/crm_divide/profiles/profile-000014.png |  Bin 41092 -> 0 bytes
+ .../figures/crm_divide/profiles/profile-000015.png |  Bin 58611 -> 0 bytes
+ .../figures/crm_divide/profiles/profile-000016.png |  Bin 46569 -> 0 bytes
+ .../figures/crm_divide/profiles/profile-000017.png |  Bin 51590 -> 0 bytes
+ .../figures/crm_divide/profiles/profile-000018.png |  Bin 48562 -> 0 bytes
+ .../figures/crm_divide/profiles/profile-000019.png |  Bin 54235 -> 0 bytes
+ .../figures/crm_divide/profiles/profile-000020.png |  Bin 56633 -> 0 bytes
+ .../figures/crm_divide/profiles/profile-000021.png |  Bin 50084 -> 0 bytes
+ .../figures/crm_divide/profiles/profile-000022.png |  Bin 43386 -> 0 bytes
+ paper/figures/crm_divide/time-evolution.pdf        |  Bin 16405 -> 0 bytes
+ paper/figures/crm_divide/time-evolution.png        |  Bin 45732 -> 0 bytes
+ paper/figures/crm_divide/timings.pdf               |  Bin 25515 -> 0 bytes
+ paper/figures/crm_divide/timings.png               |  Bin 44364 -> 0 bytes
+ paper/figures/crm_estimate_params                  |    1 -
+ paper/figures/crm_fit-data-progression.png         |  Bin 57266 -> 0 bytes
+ .../crm_fit/mie_all/celldiffs/cell-000000.pdf      |  Bin 11274 -> 0 bytes
+ .../crm_fit/mie_all/celldiffs/cell-000000.png      |  Bin 25310 -> 0 bytes
+ .../crm_fit/mie_all/celldiffs/cell-001111.pdf      |  Bin 11825 -> 0 bytes
+ .../crm_fit/mie_all/celldiffs/cell-001111.png      |  Bin 25644 -> 0 bytes
+ .../crm_fit/mie_all/celldiffs/cell-002222.pdf      |  Bin 11808 -> 0 bytes
+ .../crm_fit/mie_all/celldiffs/cell-002222.png      |  Bin 25781 -> 0 bytes
+ .../crm_fit/mie_all/celldiffs/cell-003333.pdf      |  Bin 11796 -> 0 bytes
+ .../crm_fit/mie_all/celldiffs/cell-003333.png      |  Bin 25896 -> 0 bytes
+ .../crm_fit/mie_all/celldiffs/cell-004444.pdf      |  Bin 11804 -> 0 bytes
+ .../crm_fit/mie_all/celldiffs/cell-004444.png      |  Bin 26099 -> 0 bytes
+ .../crm_fit/mie_all/celldiffs/cell-005556.pdf      |  Bin 11819 -> 0 bytes
+ .../crm_fit/mie_all/celldiffs/cell-005556.png      |  Bin 26257 -> 0 bytes
+ .../crm_fit/mie_all/celldiffs/cell-006667.pdf      |  Bin 11806 -> 0 bytes
+ .../crm_fit/mie_all/celldiffs/cell-006667.png      |  Bin 26578 -> 0 bytes
+ .../crm_fit/mie_all/celldiffs/diff-001111.png      |  Bin 2652 -> 0 bytes
+ .../crm_fit/mie_all/celldiffs/diff-002222.png      |  Bin 2629 -> 0 bytes
+ .../crm_fit/mie_all/celldiffs/diff-003333.png      |  Bin 2645 -> 0 bytes
+ .../crm_fit/mie_all/celldiffs/diff-004444.png      |  Bin 2639 -> 0 bytes
+ .../crm_fit/mie_all/celldiffs/diff-005556.png      |  Bin 2722 -> 0 bytes
+ .../crm_fit/mie_all/celldiffs/diff-006667.png      |  Bin 2800 -> 0 bytes
+ .../crm_fit/mie_all/distributions/growth-rate.pdf  |  Bin 14669 -> 0 bytes
+ .../crm_fit/mie_all/distributions/growth-rate.png  |  Bin 21608 -> 0 bytes
+ .../crm_fit/mie_all/estimate_growth_rates.csv      |    6 -
+ .../estimated-growth-rates-distribution.pdf        |  Bin 8278 -> 0 bytes
+ .../estimated-growth-rates-distribution.png        |  Bin 19106 -> 0 bytes
+ .../crm_fit/mie_all/estimated-growth-rates.pdf     |  Bin 16432 -> 0 bytes
+ .../crm_fit/mie_all/estimated-growth-rates.png     |  Bin 134902 -> 0 bytes
+ paper/figures/crm_fit/mie_all/final_params.toml    |  419 ----
+ .../crm_fit/mie_all/optimization-progression.pdf   |  Bin 15312 -> 0 bytes
+ .../crm_fit/mie_all/optimization-progression.png   |  Bin 34337 -> 0 bytes
+ paper/figures/crm_fit/mie_all/potential-shape.pdf  |  Bin 17679 -> 0 bytes
+ paper/figures/crm_fit/mie_all/potential-shape.png  |  Bin 35553 -> 0 bytes
+ paper/figures/crm_fit/mie_all/profiles/damping.pdf |  Bin 17562 -> 0 bytes
+ paper/figures/crm_fit/mie_all/profiles/damping.png |  Bin 45033 -> 0 bytes
+ .../crm_fit/mie_all/profiles/exponent-m.pdf        |  Bin 16986 -> 0 bytes
+ .../crm_fit/mie_all/profiles/exponent-m.png        |  Bin 40523 -> 0 bytes
+ .../crm_fit/mie_all/profiles/exponent-n.pdf        |  Bin 16441 -> 0 bytes
+ .../crm_fit/mie_all/profiles/exponent-n.png        |  Bin 41066 -> 0 bytes
+ .../crm_fit/mie_all/profiles/growth-rate-0.pdf     |  Bin 18558 -> 0 bytes
+ .../crm_fit/mie_all/profiles/growth-rate-0.png     |  Bin 42324 -> 0 bytes
+ .../crm_fit/mie_all/profiles/growth-rate-1.pdf     |  Bin 18504 -> 0 bytes
+ .../crm_fit/mie_all/profiles/growth-rate-1.png     |  Bin 43398 -> 0 bytes
+ .../crm_fit/mie_all/profiles/growth-rate-2.pdf     |  Bin 18796 -> 0 bytes
+ .../crm_fit/mie_all/profiles/growth-rate-2.png     |  Bin 43592 -> 0 bytes
+ .../crm_fit/mie_all/profiles/growth-rate-3.pdf     |  Bin 19392 -> 0 bytes
+ .../crm_fit/mie_all/profiles/growth-rate-3.png     |  Bin 43011 -> 0 bytes
+ .../crm_fit/mie_all/profiles/growth-rate-4.pdf     |  Bin 18655 -> 0 bytes
+ .../crm_fit/mie_all/profiles/growth-rate-4.png     |  Bin 44973 -> 0 bytes
+ .../crm_fit/mie_all/profiles/growth-rate-5.pdf     |  Bin 18979 -> 0 bytes
+ .../crm_fit/mie_all/profiles/growth-rate-5.png     |  Bin 41902 -> 0 bytes
+ .../crm_fit/mie_all/profiles/profile-damping       |  100 -
+ .../mie_all/profiles/profile-damping-filter.npy    |  Bin 228 -> 0 bytes
+ .../mie_all/profiles/profile-damping-params.npy    |  Bin 928 -> 0 bytes
+ .../crm_fit/mie_all/profiles/profile-exponent-m    |  100 -
+ .../mie_all/profiles/profile-exponent-m-filter.npy |  Bin 228 -> 0 bytes
+ .../mie_all/profiles/profile-exponent-m-params.npy |  Bin 928 -> 0 bytes
+ .../crm_fit/mie_all/profiles/profile-exponent-n    |  100 -
+ .../mie_all/profiles/profile-exponent-n-filter.npy |  Bin 228 -> 0 bytes
+ .../mie_all/profiles/profile-exponent-n-params.npy |  Bin 928 -> 0 bytes
+ .../crm_fit/mie_all/profiles/profile-growth-rate-0 |  100 -
+ .../profiles/profile-growth-rate-0-filter.npy      |  Bin 228 -> 0 bytes
+ .../profiles/profile-growth-rate-0-params.npy      |  Bin 928 -> 0 bytes
+ .../crm_fit/mie_all/profiles/profile-growth-rate-1 |  100 -
+ .../profiles/profile-growth-rate-1-filter.npy      |  Bin 228 -> 0 bytes
+ .../profiles/profile-growth-rate-1-params.npy      |  Bin 928 -> 0 bytes
+ .../crm_fit/mie_all/profiles/profile-growth-rate-2 |  100 -
+ .../profiles/profile-growth-rate-2-filter.npy      |  Bin 228 -> 0 bytes
+ .../profiles/profile-growth-rate-2-params.npy      |  Bin 928 -> 0 bytes
+ .../crm_fit/mie_all/profiles/profile-growth-rate-3 |  100 -
+ .../profiles/profile-growth-rate-3-filter.npy      |  Bin 228 -> 0 bytes
+ .../profiles/profile-growth-rate-3-params.npy      |  Bin 928 -> 0 bytes
+ .../crm_fit/mie_all/profiles/profile-growth-rate-4 |  100 -
+ .../profiles/profile-growth-rate-4-filter.npy      |  Bin 228 -> 0 bytes
+ .../profiles/profile-growth-rate-4-params.npy      |  Bin 928 -> 0 bytes
+ .../crm_fit/mie_all/profiles/profile-growth-rate-5 |  100 -
+ .../profiles/profile-growth-rate-5-filter.npy      |  Bin 228 -> 0 bytes
+ .../profiles/profile-growth-rate-5-params.npy      |  Bin 928 -> 0 bytes
+ .../crm_fit/mie_all/profiles/profile-radius        |  100 -
+ .../mie_all/profiles/profile-radius-filter.npy     |  Bin 228 -> 0 bytes
+ .../mie_all/profiles/profile-radius-params.npy     |  Bin 928 -> 0 bytes
+ .../crm_fit/mie_all/profiles/profile-strength      |  100 -
+ .../mie_all/profiles/profile-strength-filter.npy   |  Bin 228 -> 0 bytes
+ .../mie_all/profiles/profile-strength-params.npy   |  Bin 928 -> 0 bytes
+ paper/figures/crm_fit/mie_all/profiles/radius.pdf  |  Bin 16612 -> 0 bytes
+ paper/figures/crm_fit/mie_all/profiles/radius.png  |  Bin 45753 -> 0 bytes
+ .../figures/crm_fit/mie_all/profiles/strength.pdf  |  Bin 20223 -> 0 bytes
+ .../figures/crm_fit/mie_all/profiles/strength.png  |  Bin 44649 -> 0 bytes
+ paper/figures/crm_fit/mie_all/settings.toml        |   44 -
+ .../crm_fit/mie_all/snapshots/exact-000000.png     |  Bin 191960 -> 0 bytes
+ .../crm_fit/mie_all/snapshots/exact-001111.png     |  Bin 198452 -> 0 bytes
+ .../crm_fit/mie_all/snapshots/exact-002222.png     |  Bin 198566 -> 0 bytes
+ .../crm_fit/mie_all/snapshots/exact-003333.png     |  Bin 199447 -> 0 bytes
+ .../crm_fit/mie_all/snapshots/exact-004444.png     |  Bin 196067 -> 0 bytes
+ .../crm_fit/mie_all/snapshots/exact-005556.png     |  Bin 197757 -> 0 bytes
+ .../crm_fit/mie_all/snapshots/exact-006667.png     |  Bin 198346 -> 0 bytes
+ .../crm_fit/mie_all/snapshots/predicted-000000.png |  Bin 190546 -> 0 bytes
+ .../crm_fit/mie_all/snapshots/predicted-001111.png |  Bin 197018 -> 0 bytes
+ .../crm_fit/mie_all/snapshots/predicted-002222.png |  Bin 196906 -> 0 bytes
+ .../crm_fit/mie_all/snapshots/predicted-003333.png |  Bin 197911 -> 0 bytes
+ .../crm_fit/mie_all/snapshots/predicted-004444.png |  Bin 194482 -> 0 bytes
+ .../crm_fit/mie_all/snapshots/predicted-005556.png |  Bin 196249 -> 0 bytes
+ .../crm_fit/mie_all/snapshots/predicted-006667.png |  Bin 196812 -> 0 bytes
+ .../crm_fit/mie_partial/celldiffs/cell-000000.pdf  |  Bin 11274 -> 0 bytes
+ .../crm_fit/mie_partial/celldiffs/cell-000000.png  |  Bin 25310 -> 0 bytes
+ .../crm_fit/mie_partial/celldiffs/cell-001111.pdf  |  Bin 11828 -> 0 bytes
+ .../crm_fit/mie_partial/celldiffs/cell-001111.png  |  Bin 25706 -> 0 bytes
+ .../crm_fit/mie_partial/celldiffs/cell-002222.pdf  |  Bin 11814 -> 0 bytes
+ .../crm_fit/mie_partial/celldiffs/cell-002222.png  |  Bin 25801 -> 0 bytes
+ .../crm_fit/mie_partial/celldiffs/cell-003333.pdf  |  Bin 11807 -> 0 bytes
+ .../crm_fit/mie_partial/celldiffs/cell-003333.png  |  Bin 25960 -> 0 bytes
+ .../crm_fit/mie_partial/celldiffs/cell-004444.pdf  |  Bin 11811 -> 0 bytes
+ .../crm_fit/mie_partial/celldiffs/cell-004444.png  |  Bin 26130 -> 0 bytes
+ .../crm_fit/mie_partial/celldiffs/cell-005556.pdf  |  Bin 11832 -> 0 bytes
+ .../crm_fit/mie_partial/celldiffs/cell-005556.png  |  Bin 26258 -> 0 bytes
+ .../crm_fit/mie_partial/celldiffs/cell-006667.pdf  |  Bin 11808 -> 0 bytes
+ .../crm_fit/mie_partial/celldiffs/cell-006667.png  |  Bin 26557 -> 0 bytes
+ .../crm_fit/mie_partial/celldiffs/diff-001111.png  |  Bin 2683 -> 0 bytes
+ .../crm_fit/mie_partial/celldiffs/diff-002222.png  |  Bin 2655 -> 0 bytes
+ .../crm_fit/mie_partial/celldiffs/diff-003333.png  |  Bin 2661 -> 0 bytes
+ .../crm_fit/mie_partial/celldiffs/diff-004444.png  |  Bin 2654 -> 0 bytes
+ .../crm_fit/mie_partial/celldiffs/diff-005556.png  |  Bin 2726 -> 0 bytes
+ .../crm_fit/mie_partial/celldiffs/diff-006667.png  |  Bin 2807 -> 0 bytes
+ .../mie_partial/distributions/growth-rate.pdf      |  Bin 15266 -> 0 bytes
+ .../mie_partial/distributions/growth-rate.png      |  Bin 21366 -> 0 bytes
+ .../crm_fit/mie_partial/estimate_growth_rates.csv  |    6 -
+ .../estimated-growth-rates-distribution.pdf        |  Bin 8278 -> 0 bytes
+ .../estimated-growth-rates-distribution.png        |  Bin 19106 -> 0 bytes
+ .../crm_fit/mie_partial/estimated-growth-rates.pdf |  Bin 16432 -> 0 bytes
+ .../crm_fit/mie_partial/estimated-growth-rates.png |  Bin 134902 -> 0 bytes
+ .../figures/crm_fit/mie_partial/final_params.toml  |  199 --
+ .../mie_partial/optimization-progression.pdf       |  Bin 14176 -> 0 bytes
+ .../mie_partial/optimization-progression.png       |  Bin 28337 -> 0 bytes
+ .../crm_fit/mie_partial/potential-shape.pdf        |  Bin 18677 -> 0 bytes
+ .../crm_fit/mie_partial/potential-shape.png        |  Bin 37936 -> 0 bytes
+ .../crm_fit/mie_partial/profiles/exponent-m.pdf    |  Bin 16927 -> 0 bytes
+ .../crm_fit/mie_partial/profiles/exponent-m.png    |  Bin 38476 -> 0 bytes
+ .../crm_fit/mie_partial/profiles/exponent-n.pdf    |  Bin 16384 -> 0 bytes
+ .../crm_fit/mie_partial/profiles/exponent-n.png    |  Bin 38304 -> 0 bytes
+ .../crm_fit/mie_partial/profiles/growth-rate-0.pdf |  Bin 17941 -> 0 bytes
+ .../crm_fit/mie_partial/profiles/growth-rate-0.png |  Bin 41342 -> 0 bytes
+ .../crm_fit/mie_partial/profiles/growth-rate-1.pdf |  Bin 17978 -> 0 bytes
+ .../crm_fit/mie_partial/profiles/growth-rate-1.png |  Bin 42046 -> 0 bytes
+ .../crm_fit/mie_partial/profiles/growth-rate-2.pdf |  Bin 18239 -> 0 bytes
+ .../crm_fit/mie_partial/profiles/growth-rate-2.png |  Bin 43186 -> 0 bytes
+ .../crm_fit/mie_partial/profiles/growth-rate-3.pdf |  Bin 18866 -> 0 bytes
+ .../crm_fit/mie_partial/profiles/growth-rate-3.png |  Bin 41183 -> 0 bytes
+ .../crm_fit/mie_partial/profiles/growth-rate-4.pdf |  Bin 18371 -> 0 bytes
+ .../crm_fit/mie_partial/profiles/growth-rate-4.png |  Bin 45498 -> 0 bytes
+ .../crm_fit/mie_partial/profiles/growth-rate-5.pdf |  Bin 18166 -> 0 bytes
+ .../crm_fit/mie_partial/profiles/growth-rate-5.png |  Bin 42740 -> 0 bytes
+ .../mie_partial/profiles/profile-exponent-m        |  100 -
+ .../profiles/profile-exponent-m-filter.npy         |  Bin 228 -> 0 bytes
+ .../profiles/profile-exponent-m-params.npy         |  Bin 928 -> 0 bytes
+ .../mie_partial/profiles/profile-exponent-n        |  100 -
+ .../profiles/profile-exponent-n-filter.npy         |  Bin 228 -> 0 bytes
+ .../profiles/profile-exponent-n-params.npy         |  Bin 928 -> 0 bytes
+ .../mie_partial/profiles/profile-growth-rate-0     |  100 -
+ .../profiles/profile-growth-rate-0-filter.npy      |  Bin 228 -> 0 bytes
+ .../profiles/profile-growth-rate-0-params.npy      |  Bin 928 -> 0 bytes
+ .../mie_partial/profiles/profile-growth-rate-1     |  100 -
+ .../profiles/profile-growth-rate-1-filter.npy      |  Bin 228 -> 0 bytes
+ .../profiles/profile-growth-rate-1-params.npy      |  Bin 928 -> 0 bytes
+ .../mie_partial/profiles/profile-growth-rate-2     |  100 -
+ .../profiles/profile-growth-rate-2-filter.npy      |  Bin 228 -> 0 bytes
+ .../profiles/profile-growth-rate-2-params.npy      |  Bin 928 -> 0 bytes
+ .../mie_partial/profiles/profile-growth-rate-3     |  100 -
+ .../profiles/profile-growth-rate-3-filter.npy      |  Bin 228 -> 0 bytes
+ .../profiles/profile-growth-rate-3-params.npy      |  Bin 928 -> 0 bytes
+ .../mie_partial/profiles/profile-growth-rate-4     |  100 -
+ .../profiles/profile-growth-rate-4-filter.npy      |  Bin 228 -> 0 bytes
+ .../profiles/profile-growth-rate-4-params.npy      |  Bin 928 -> 0 bytes
+ .../mie_partial/profiles/profile-growth-rate-5     |  100 -
+ .../profiles/profile-growth-rate-5-filter.npy      |  Bin 228 -> 0 bytes
+ .../profiles/profile-growth-rate-5-params.npy      |  Bin 928 -> 0 bytes
+ .../crm_fit/mie_partial/profiles/profile-radius    |  100 -
+ .../mie_partial/profiles/profile-radius-filter.npy |  Bin 228 -> 0 bytes
+ .../mie_partial/profiles/profile-radius-params.npy |  Bin 928 -> 0 bytes
+ .../crm_fit/mie_partial/profiles/profile-strength  |  100 -
+ .../profiles/profile-strength-filter.npy           |  Bin 228 -> 0 bytes
+ .../profiles/profile-strength-params.npy           |  Bin 928 -> 0 bytes
+ .../crm_fit/mie_partial/profiles/radius.pdf        |  Bin 16018 -> 0 bytes
+ .../crm_fit/mie_partial/profiles/radius.png        |  Bin 46011 -> 0 bytes
+ .../crm_fit/mie_partial/profiles/strength.pdf      |  Bin 17747 -> 0 bytes
+ .../crm_fit/mie_partial/profiles/strength.png      |  Bin 56274 -> 0 bytes
+ paper/figures/crm_fit/mie_partial/settings.toml    |   44 -
+ .../crm_fit/mie_partial/snapshots/exact-000000.png |  Bin 191960 -> 0 bytes
+ .../crm_fit/mie_partial/snapshots/exact-001111.png |  Bin 198452 -> 0 bytes
+ .../crm_fit/mie_partial/snapshots/exact-002222.png |  Bin 198566 -> 0 bytes
+ .../crm_fit/mie_partial/snapshots/exact-003333.png |  Bin 199447 -> 0 bytes
+ .../crm_fit/mie_partial/snapshots/exact-004444.png |  Bin 196067 -> 0 bytes
+ .../crm_fit/mie_partial/snapshots/exact-005556.png |  Bin 197757 -> 0 bytes
+ .../crm_fit/mie_partial/snapshots/exact-006667.png |  Bin 198346 -> 0 bytes
+ .../mie_partial/snapshots/predicted-000000.png     |  Bin 190542 -> 0 bytes
+ .../mie_partial/snapshots/predicted-001111.png     |  Bin 197037 -> 0 bytes
+ .../mie_partial/snapshots/predicted-002222.png     |  Bin 196883 -> 0 bytes
+ .../mie_partial/snapshots/predicted-003333.png     |  Bin 197926 -> 0 bytes
+ .../mie_partial/snapshots/predicted-004444.png     |  Bin 194489 -> 0 bytes
+ .../mie_partial/snapshots/predicted-005556.png     |  Bin 196255 -> 0 bytes
+ .../mie_partial/snapshots/predicted-006667.png     |  Bin 196793 -> 0 bytes
+ .../crm_fit/morse_all/celldiffs/cell-000000.pdf    |  Bin 11274 -> 0 bytes
+ .../crm_fit/morse_all/celldiffs/cell-000000.png    |  Bin 25310 -> 0 bytes
+ .../crm_fit/morse_all/celldiffs/cell-001111.pdf    |  Bin 11820 -> 0 bytes
+ .../crm_fit/morse_all/celldiffs/cell-001111.png    |  Bin 25689 -> 0 bytes
+ .../crm_fit/morse_all/celldiffs/cell-002222.pdf    |  Bin 11810 -> 0 bytes
+ .../crm_fit/morse_all/celldiffs/cell-002222.png    |  Bin 25796 -> 0 bytes
+ .../crm_fit/morse_all/celldiffs/cell-003333.pdf    |  Bin 11800 -> 0 bytes
+ .../crm_fit/morse_all/celldiffs/cell-003333.png    |  Bin 25915 -> 0 bytes
+ .../crm_fit/morse_all/celldiffs/cell-004444.pdf    |  Bin 11792 -> 0 bytes
+ .../crm_fit/morse_all/celldiffs/cell-004444.png    |  Bin 26092 -> 0 bytes
+ .../crm_fit/morse_all/celldiffs/cell-005556.pdf    |  Bin 11833 -> 0 bytes
+ .../crm_fit/morse_all/celldiffs/cell-005556.png    |  Bin 26266 -> 0 bytes
+ .../crm_fit/morse_all/celldiffs/cell-006667.pdf    |  Bin 11812 -> 0 bytes
+ .../crm_fit/morse_all/celldiffs/cell-006667.png    |  Bin 26565 -> 0 bytes
+ .../crm_fit/morse_all/celldiffs/diff-000000.png    |  Bin 2886 -> 0 bytes
+ .../crm_fit/morse_all/celldiffs/diff-001111.png    |  Bin 2866 -> 0 bytes
+ .../crm_fit/morse_all/celldiffs/diff-002222.png    |  Bin 2907 -> 0 bytes
+ .../crm_fit/morse_all/celldiffs/diff-003333.png    |  Bin 2949 -> 0 bytes
+ .../crm_fit/morse_all/celldiffs/diff-004444.png    |  Bin 2938 -> 0 bytes
+ .../crm_fit/morse_all/celldiffs/diff-005556.png    |  Bin 2981 -> 0 bytes
+ .../crm_fit/morse_all/celldiffs/diff-006667.png    |  Bin 2996 -> 0 bytes
+ .../morse_all/distributions/growth-rate.pdf        |  Bin 14645 -> 0 bytes
+ .../morse_all/distributions/growth-rate.png        |  Bin 21176 -> 0 bytes
+ .../crm_fit/morse_all/estimate_growth_rates.csv    |    6 -
+ .../estimated-growth-rates-distribution.pdf        |  Bin 8278 -> 0 bytes
+ .../estimated-growth-rates-distribution.png        |  Bin 19106 -> 0 bytes
+ .../crm_fit/morse_all/estimated-growth-rates.pdf   |  Bin 16432 -> 0 bytes
+ .../crm_fit/morse_all/estimated-growth-rates.png   |  Bin 134902 -> 0 bytes
+ paper/figures/crm_fit/morse_all/final_params.toml  |  389 ----
+ .../crm_fit/morse_all/optimization-progression.pdf |  Bin 15276 -> 0 bytes
+ .../crm_fit/morse_all/optimization-progression.png |  Bin 34523 -> 0 bytes
+ .../figures/crm_fit/morse_all/potential-shape.pdf  |  Bin 16752 -> 0 bytes
+ .../figures/crm_fit/morse_all/potential-shape.png  |  Bin 42527 -> 0 bytes
+ .../crm_fit/morse_all/profiles-2/damping.pdf       |  Bin 21103 -> 0 bytes
+ .../crm_fit/morse_all/profiles-2/damping.png       |  Bin 127421 -> 0 bytes
+ .../crm_fit/morse_all/profiles-2/growth-rate-0.pdf |  Bin 19894 -> 0 bytes
+ .../crm_fit/morse_all/profiles-2/growth-rate-0.png |  Bin 41521 -> 0 bytes
+ .../crm_fit/morse_all/profiles-2/growth-rate-1.pdf |  Bin 19794 -> 0 bytes
+ .../crm_fit/morse_all/profiles-2/growth-rate-1.png |  Bin 42266 -> 0 bytes
+ .../crm_fit/morse_all/profiles-2/growth-rate-2.pdf |  Bin 20114 -> 0 bytes
+ .../crm_fit/morse_all/profiles-2/growth-rate-2.png |  Bin 40383 -> 0 bytes
+ .../crm_fit/morse_all/profiles-2/growth-rate-3.pdf |  Bin 20233 -> 0 bytes
+ .../crm_fit/morse_all/profiles-2/growth-rate-3.png |  Bin 40113 -> 0 bytes
+ .../crm_fit/morse_all/profiles-2/growth-rate-4.pdf |  Bin 21085 -> 0 bytes
+ .../crm_fit/morse_all/profiles-2/growth-rate-4.png |  Bin 50234 -> 0 bytes
+ .../crm_fit/morse_all/profiles-2/growth-rate-5.pdf |  Bin 20666 -> 0 bytes
+ .../crm_fit/morse_all/profiles-2/growth-rate-5.png |  Bin 41227 -> 0 bytes
+ .../morse_all/profiles-2/potential-stiffness.pdf   |  Bin 24677 -> 0 bytes
+ .../morse_all/profiles-2/potential-stiffness.png   |  Bin 49363 -> 0 bytes
+ .../crm_fit/morse_all/profiles-2/profile-damping   |  300 ---
+ .../profiles-2/profile-damping-params.npy          |  Bin 2528 -> 0 bytes
+ .../morse_all/profiles-2/profile-growth-rate-0     |  300 ---
+ .../profiles-2/profile-growth-rate-0-params.npy    |  Bin 2528 -> 0 bytes
+ .../morse_all/profiles-2/profile-growth-rate-1     |  300 ---
+ .../profiles-2/profile-growth-rate-1-params.npy    |  Bin 2528 -> 0 bytes
+ .../morse_all/profiles-2/profile-growth-rate-2     |  300 ---
+ .../profiles-2/profile-growth-rate-2-params.npy    |  Bin 2528 -> 0 bytes
+ .../morse_all/profiles-2/profile-growth-rate-3     |  300 ---
+ .../profiles-2/profile-growth-rate-3-params.npy    |  Bin 2528 -> 0 bytes
+ .../morse_all/profiles-2/profile-growth-rate-4     |  300 ---
+ .../profiles-2/profile-growth-rate-4-params.npy    |  Bin 2528 -> 0 bytes
+ .../morse_all/profiles-2/profile-growth-rate-5     |  300 ---
+ .../profiles-2/profile-growth-rate-5-params.npy    |  Bin 2528 -> 0 bytes
+ .../profiles-2/profile-potential-stiffness         |  300 ---
+ .../profile-potential-stiffness-params.npy         |  Bin 2528 -> 0 bytes
+ .../crm_fit/morse_all/profiles-2/profile-radius    |  300 ---
+ .../morse_all/profiles-2/profile-radius-params.npy |  Bin 2528 -> 0 bytes
+ .../crm_fit/morse_all/profiles-2/profile-strength  |  300 ---
+ .../profiles-2/profile-strength-params.npy         |  Bin 2528 -> 0 bytes
+ .../crm_fit/morse_all/profiles-2/radius.pdf        |  Bin 19729 -> 0 bytes
+ .../crm_fit/morse_all/profiles-2/radius.png        |  Bin 41476 -> 0 bytes
+ .../crm_fit/morse_all/profiles-2/strength.pdf      |  Bin 21342 -> 0 bytes
+ .../crm_fit/morse_all/profiles-2/strength.png      |  Bin 129627 -> 0 bytes
+ .../figures/crm_fit/morse_all/profiles/damping.pdf |  Bin 22935 -> 0 bytes
+ .../figures/crm_fit/morse_all/profiles/damping.png |  Bin 74954 -> 0 bytes
+ .../crm_fit/morse_all/profiles/growth-rate-0.pdf   |  Bin 19894 -> 0 bytes
+ .../crm_fit/morse_all/profiles/growth-rate-0.png   |  Bin 41521 -> 0 bytes
+ .../crm_fit/morse_all/profiles/growth-rate-1.pdf   |  Bin 19794 -> 0 bytes
+ .../crm_fit/morse_all/profiles/growth-rate-1.png   |  Bin 42266 -> 0 bytes
+ .../crm_fit/morse_all/profiles/growth-rate-2.pdf   |  Bin 20114 -> 0 bytes
+ .../crm_fit/morse_all/profiles/growth-rate-2.png   |  Bin 40383 -> 0 bytes
+ .../crm_fit/morse_all/profiles/growth-rate-3.pdf   |  Bin 20233 -> 0 bytes
+ .../crm_fit/morse_all/profiles/growth-rate-3.png   |  Bin 40113 -> 0 bytes
+ .../crm_fit/morse_all/profiles/growth-rate-4.pdf   |  Bin 21085 -> 0 bytes
+ .../crm_fit/morse_all/profiles/growth-rate-4.png   |  Bin 50234 -> 0 bytes
+ .../crm_fit/morse_all/profiles/growth-rate-5.pdf   |  Bin 20666 -> 0 bytes
+ .../crm_fit/morse_all/profiles/growth-rate-5.png   |  Bin 41227 -> 0 bytes
+ .../morse_all/profiles/potential-stiffness.pdf     |  Bin 24677 -> 0 bytes
+ .../morse_all/profiles/potential-stiffness.png     |  Bin 49363 -> 0 bytes
+ .../crm_fit/morse_all/profiles/profile-damping     |  300 ---
+ .../morse_all/profiles/profile-damping-filter.npy  |  Bin 428 -> 0 bytes
+ .../morse_all/profiles/profile-damping-params.npy  |  Bin 2528 -> 0 bytes
+ .../morse_all/profiles/profile-growth-rate-0       |  300 ---
+ .../profiles/profile-growth-rate-0-params.npy      |  Bin 2528 -> 0 bytes
+ .../morse_all/profiles/profile-growth-rate-1       |  300 ---
+ .../profiles/profile-growth-rate-1-params.npy      |  Bin 2528 -> 0 bytes
+ .../morse_all/profiles/profile-growth-rate-2       |  300 ---
+ .../profiles/profile-growth-rate-2-params.npy      |  Bin 2528 -> 0 bytes
+ .../morse_all/profiles/profile-growth-rate-3       |  300 ---
+ .../profiles/profile-growth-rate-3-params.npy      |  Bin 2528 -> 0 bytes
+ .../morse_all/profiles/profile-growth-rate-4       |  300 ---
+ .../profiles/profile-growth-rate-4-filter.npy      |  Bin 428 -> 0 bytes
+ .../profiles/profile-growth-rate-4-params.npy      |  Bin 2528 -> 0 bytes
+ .../morse_all/profiles/profile-growth-rate-5       |  300 ---
+ .../profiles/profile-growth-rate-5-params.npy      |  Bin 2528 -> 0 bytes
+ .../morse_all/profiles/profile-potential-stiffness |  300 ---
+ .../profile-potential-stiffness-params.npy         |  Bin 2528 -> 0 bytes
+ .../crm_fit/morse_all/profiles/profile-radius      |  300 ---
+ .../morse_all/profiles/profile-radius-params.npy   |  Bin 2528 -> 0 bytes
+ .../crm_fit/morse_all/profiles/profile-strength    |  300 ---
+ .../morse_all/profiles/profile-strength-filter.npy |  Bin 428 -> 0 bytes
+ .../morse_all/profiles/profile-strength-params.npy |  Bin 2528 -> 0 bytes
+ .../figures/crm_fit/morse_all/profiles/radius.pdf  |  Bin 19729 -> 0 bytes
+ .../figures/crm_fit/morse_all/profiles/radius.png  |  Bin 41476 -> 0 bytes
+ .../crm_fit/morse_all/profiles/strength.pdf        |  Bin 24307 -> 0 bytes
+ .../crm_fit/morse_all/profiles/strength.png        |  Bin 49479 -> 0 bytes
+ paper/figures/crm_fit/morse_all/settings.toml      |   44 -
+ .../crm_fit/morse_all/snapshots/exact-000000.png   |  Bin 191960 -> 0 bytes
+ .../crm_fit/morse_all/snapshots/exact-001111.png   |  Bin 198452 -> 0 bytes
+ .../crm_fit/morse_all/snapshots/exact-002222.png   |  Bin 198566 -> 0 bytes
+ .../crm_fit/morse_all/snapshots/exact-003333.png   |  Bin 199447 -> 0 bytes
+ .../crm_fit/morse_all/snapshots/exact-004444.png   |  Bin 196067 -> 0 bytes
+ .../crm_fit/morse_all/snapshots/exact-005556.png   |  Bin 197757 -> 0 bytes
+ .../crm_fit/morse_all/snapshots/exact-006667.png   |  Bin 198346 -> 0 bytes
+ .../morse_all/snapshots/predicted-000000.png       |  Bin 190473 -> 0 bytes
+ .../morse_all/snapshots/predicted-001111.png       |  Bin 196885 -> 0 bytes
+ .../morse_all/snapshots/predicted-002222.png       |  Bin 196777 -> 0 bytes
+ .../morse_all/snapshots/predicted-003333.png       |  Bin 197812 -> 0 bytes
+ .../morse_all/snapshots/predicted-004444.png       |  Bin 194383 -> 0 bytes
+ .../morse_all/snapshots/predicted-005556.png       |  Bin 196154 -> 0 bytes
+ .../morse_all/snapshots/predicted-006667.png       |  Bin 196617 -> 0 bytes
+ .../morse_partial/celldiffs/cell-000000.pdf        |  Bin 11274 -> 0 bytes
+ .../morse_partial/celldiffs/cell-000000.png        |  Bin 25310 -> 0 bytes
+ .../morse_partial/celldiffs/cell-001111.pdf        |  Bin 11818 -> 0 bytes
+ .../morse_partial/celldiffs/cell-001111.png        |  Bin 25747 -> 0 bytes
+ .../morse_partial/celldiffs/cell-002222.pdf        |  Bin 11810 -> 0 bytes
+ .../morse_partial/celldiffs/cell-002222.png        |  Bin 25793 -> 0 bytes
+ .../morse_partial/celldiffs/cell-003333.pdf        |  Bin 11797 -> 0 bytes
+ .../morse_partial/celldiffs/cell-003333.png        |  Bin 25926 -> 0 bytes
+ .../morse_partial/celldiffs/cell-004444.pdf        |  Bin 11796 -> 0 bytes
+ .../morse_partial/celldiffs/cell-004444.png        |  Bin 26072 -> 0 bytes
+ .../morse_partial/celldiffs/cell-005556.pdf        |  Bin 11822 -> 0 bytes
+ .../morse_partial/celldiffs/cell-005556.png        |  Bin 26254 -> 0 bytes
+ .../morse_partial/celldiffs/cell-006667.pdf        |  Bin 11814 -> 0 bytes
+ .../morse_partial/celldiffs/cell-006667.png        |  Bin 26582 -> 0 bytes
+ .../morse_partial/celldiffs/diff-000000.png        |  Bin 2883 -> 0 bytes
+ .../morse_partial/celldiffs/diff-001111.png        |  Bin 2911 -> 0 bytes
+ .../morse_partial/celldiffs/diff-002222.png        |  Bin 2952 -> 0 bytes
+ .../morse_partial/celldiffs/diff-003333.png        |  Bin 2987 -> 0 bytes
+ .../morse_partial/celldiffs/diff-004444.png        |  Bin 2985 -> 0 bytes
+ .../morse_partial/celldiffs/diff-005556.png        |  Bin 3023 -> 0 bytes
+ .../morse_partial/celldiffs/diff-006667.png        |  Bin 3022 -> 0 bytes
+ .../morse_partial/distributions/growth-rate.pdf    |  Bin 14643 -> 0 bytes
+ .../morse_partial/distributions/growth-rate.png    |  Bin 20889 -> 0 bytes
+ .../morse_partial/estimate_growth_rates.csv        |    6 -
+ .../estimated-growth-rates-distribution.pdf        |  Bin 8278 -> 0 bytes
+ .../estimated-growth-rates-distribution.png        |  Bin 19106 -> 0 bytes
+ .../morse_partial/estimated-growth-rates.pdf       |  Bin 16432 -> 0 bytes
+ .../morse_partial/estimated-growth-rates.png       |  Bin 134902 -> 0 bytes
+ .../crm_fit/morse_partial/final_params.toml        |  417 ----
+ .../morse_partial/optimization-progression.pdf     |  Bin 14225 -> 0 bytes
+ .../morse_partial/optimization-progression.png     |  Bin 29650 -> 0 bytes
+ .../crm_fit/morse_partial/potential-shape.pdf      |  Bin 17493 -> 0 bytes
+ .../crm_fit/morse_partial/potential-shape.png      |  Bin 36044 -> 0 bytes
+ .../morse_partial/profiles-2/growth-rate-0.pdf     |  Bin 19758 -> 0 bytes
+ .../morse_partial/profiles-2/growth-rate-0.png     |  Bin 41388 -> 0 bytes
+ .../morse_partial/profiles-2/growth-rate-1.pdf     |  Bin 19649 -> 0 bytes
+ .../morse_partial/profiles-2/growth-rate-1.png     |  Bin 42129 -> 0 bytes
+ .../morse_partial/profiles-2/growth-rate-2.pdf     |  Bin 20168 -> 0 bytes
+ .../morse_partial/profiles-2/growth-rate-2.png     |  Bin 40321 -> 0 bytes
+ .../morse_partial/profiles-2/growth-rate-3.pdf     |  Bin 20290 -> 0 bytes
+ .../morse_partial/profiles-2/growth-rate-3.png     |  Bin 40006 -> 0 bytes
+ .../morse_partial/profiles-2/growth-rate-4.pdf     |  Bin 21170 -> 0 bytes
+ .../morse_partial/profiles-2/growth-rate-4.png     |  Bin 50143 -> 0 bytes
+ .../morse_partial/profiles-2/growth-rate-5.pdf     |  Bin 20697 -> 0 bytes
+ .../morse_partial/profiles-2/growth-rate-5.png     |  Bin 41029 -> 0 bytes
+ .../profiles-2/potential-stiffness.pdf             |  Bin 24679 -> 0 bytes
+ .../profiles-2/potential-stiffness.png             |  Bin 161386 -> 0 bytes
+ .../morse_partial/profiles-2/profile-growth-rate-0 |  300 ---
+ .../profiles-2/profile-growth-rate-0-params.npy    |  Bin 2528 -> 0 bytes
+ .../morse_partial/profiles-2/profile-growth-rate-1 |  300 ---
+ .../profiles-2/profile-growth-rate-1-params.npy    |  Bin 2528 -> 0 bytes
+ .../morse_partial/profiles-2/profile-growth-rate-2 |  300 ---
+ .../profiles-2/profile-growth-rate-2-params.npy    |  Bin 2528 -> 0 bytes
+ .../morse_partial/profiles-2/profile-growth-rate-3 |  300 ---
+ .../profiles-2/profile-growth-rate-3-params.npy    |  Bin 2528 -> 0 bytes
+ .../morse_partial/profiles-2/profile-growth-rate-4 |  300 ---
+ .../profiles-2/profile-growth-rate-4-params.npy    |  Bin 2528 -> 0 bytes
+ .../morse_partial/profiles-2/profile-growth-rate-5 |  300 ---
+ .../profiles-2/profile-growth-rate-5-params.npy    |  Bin 2528 -> 0 bytes
+ .../profiles-2/profile-potential-stiffness         |  300 ---
+ .../profile-potential-stiffness-params.npy         |  Bin 2528 -> 0 bytes
+ .../morse_partial/profiles-2/profile-radius        |  300 ---
+ .../profiles-2/profile-radius-params.npy           |  Bin 2528 -> 0 bytes
+ .../morse_partial/profiles-2/profile-strength      |  300 ---
+ .../profiles-2/profile-strength-params.npy         |  Bin 2528 -> 0 bytes
+ .../profiles-2/profiles/growth-rate-0.pdf          |  Bin 19875 -> 0 bytes
+ .../profiles-2/profiles/growth-rate-0.png          |  Bin 41345 -> 0 bytes
+ .../profiles-2/profiles/growth-rate-1.pdf          |  Bin 19785 -> 0 bytes
+ .../profiles-2/profiles/growth-rate-1.png          |  Bin 42147 -> 0 bytes
+ .../profiles-2/profiles/growth-rate-2.pdf          |  Bin 20111 -> 0 bytes
+ .../profiles-2/profiles/growth-rate-2.png          |  Bin 40321 -> 0 bytes
+ .../profiles-2/profiles/growth-rate-3.pdf          |  Bin 20216 -> 0 bytes
+ .../profiles-2/profiles/growth-rate-3.png          |  Bin 40006 -> 0 bytes
+ .../profiles-2/profiles/growth-rate-4.pdf          |  Bin 21095 -> 0 bytes
+ .../profiles-2/profiles/growth-rate-4.png          |  Bin 50143 -> 0 bytes
+ .../profiles-2/profiles/growth-rate-5.pdf          |  Bin 20650 -> 0 bytes
+ .../profiles-2/profiles/growth-rate-5.png          |  Bin 41029 -> 0 bytes
+ .../profiles-2/profiles/potential-stiffness.pdf    |  Bin 24590 -> 0 bytes
+ .../profiles-2/profiles/potential-stiffness.png    |  Bin 44268 -> 0 bytes
+ .../profiles-2/profiles/profile-growth-rate-0      |  300 ---
+ .../profiles/profile-growth-rate-0-params.npy      |  Bin 2528 -> 0 bytes
+ .../profiles-2/profiles/profile-growth-rate-1      |  300 ---
+ .../profiles/profile-growth-rate-1-params.npy      |  Bin 2528 -> 0 bytes
+ .../profiles-2/profiles/profile-growth-rate-2      |  300 ---
+ .../profiles/profile-growth-rate-2-params.npy      |  Bin 2528 -> 0 bytes
+ .../profiles-2/profiles/profile-growth-rate-3      |  300 ---
+ .../profiles/profile-growth-rate-3-params.npy      |  Bin 2528 -> 0 bytes
+ .../profiles-2/profiles/profile-growth-rate-4      |  300 ---
+ .../profiles/profile-growth-rate-4-params.npy      |  Bin 2528 -> 0 bytes
+ .../profiles-2/profiles/profile-growth-rate-5      |  300 ---
+ .../profiles/profile-growth-rate-5-params.npy      |  Bin 2528 -> 0 bytes
+ .../profiles/profile-potential-stiffness           |  300 ---
+ .../profile-potential-stiffness-params.npy         |  Bin 2528 -> 0 bytes
+ .../profiles-2/profiles/profile-radius             |  300 ---
+ .../profiles-2/profiles/profile-radius-params.npy  |  Bin 2528 -> 0 bytes
+ .../profiles-2/profiles/profile-strength           |  300 ---
+ .../profiles/profile-strength-params.npy           |  Bin 2528 -> 0 bytes
+ .../morse_partial/profiles-2/profiles/radius.pdf   |  Bin 20037 -> 0 bytes
+ .../morse_partial/profiles-2/profiles/radius.png   |  Bin 43261 -> 0 bytes
+ .../morse_partial/profiles-2/profiles/strength.pdf |  Bin 20975 -> 0 bytes
+ .../morse_partial/profiles-2/profiles/strength.png |  Bin 57559 -> 0 bytes
+ .../crm_fit/morse_partial/profiles-2/radius.pdf    |  Bin 20096 -> 0 bytes
+ .../crm_fit/morse_partial/profiles-2/radius.png    |  Bin 44363 -> 0 bytes
+ .../crm_fit/morse_partial/profiles-2/strength.pdf  |  Bin 17470 -> 0 bytes
+ .../crm_fit/morse_partial/profiles-2/strength.png  |  Bin 46979 -> 0 bytes
+ .../morse_partial/profiles/growth-rate-0.pdf       |  Bin 19875 -> 0 bytes
+ .../morse_partial/profiles/growth-rate-0.png       |  Bin 41345 -> 0 bytes
+ .../morse_partial/profiles/growth-rate-1.pdf       |  Bin 19785 -> 0 bytes
+ .../morse_partial/profiles/growth-rate-1.png       |  Bin 42147 -> 0 bytes
+ .../morse_partial/profiles/growth-rate-2.pdf       |  Bin 20059 -> 0 bytes
+ .../morse_partial/profiles/growth-rate-2.png       |  Bin 40051 -> 0 bytes
+ .../morse_partial/profiles/growth-rate-3.pdf       |  Bin 20151 -> 0 bytes
+ .../morse_partial/profiles/growth-rate-3.png       |  Bin 40032 -> 0 bytes
+ .../morse_partial/profiles/growth-rate-4.pdf       |  Bin 20977 -> 0 bytes
+ .../morse_partial/profiles/growth-rate-4.png       |  Bin 42208 -> 0 bytes
+ .../morse_partial/profiles/growth-rate-5.pdf       |  Bin 20605 -> 0 bytes
+ .../morse_partial/profiles/growth-rate-5.png       |  Bin 41057 -> 0 bytes
+ .../morse_partial/profiles/potential-stiffness.pdf |  Bin 24590 -> 0 bytes
+ .../morse_partial/profiles/potential-stiffness.png |  Bin 44268 -> 0 bytes
+ .../morse_partial/profiles/profile-growth-rate-0   |  300 ---
+ .../profiles/profile-growth-rate-0-params.npy      |  Bin 2528 -> 0 bytes
+ .../morse_partial/profiles/profile-growth-rate-1   |  300 ---
+ .../profiles/profile-growth-rate-1-params.npy      |  Bin 2528 -> 0 bytes
+ .../morse_partial/profiles/profile-growth-rate-2   |  300 ---
+ .../profiles/profile-growth-rate-2-params.npy      |  Bin 2528 -> 0 bytes
+ .../morse_partial/profiles/profile-growth-rate-3   |  300 ---
+ .../profiles/profile-growth-rate-3-params.npy      |  Bin 2528 -> 0 bytes
+ .../morse_partial/profiles/profile-growth-rate-4   |  300 ---
+ .../profiles/profile-growth-rate-4-params.npy      |  Bin 2528 -> 0 bytes
+ .../morse_partial/profiles/profile-growth-rate-5   |  300 ---
+ .../profiles/profile-growth-rate-5-params.npy      |  Bin 2528 -> 0 bytes
+ .../profiles/profile-potential-stiffness           |  300 ---
+ .../profile-potential-stiffness-params.npy         |  Bin 2528 -> 0 bytes
+ .../crm_fit/morse_partial/profiles/profile-radius  |  300 ---
+ .../profiles/profile-radius-params.npy             |  Bin 2528 -> 0 bytes
+ .../morse_partial/profiles/profile-strength        |  200 --
+ .../profiles/profile-strength-filter.npy           |  Bin 328 -> 0 bytes
+ .../profiles/profile-strength-params.npy           |  Bin 1728 -> 0 bytes
+ .../crm_fit/morse_partial/profiles/radius.pdf      |  Bin 20037 -> 0 bytes
+ .../crm_fit/morse_partial/profiles/radius.png      |  Bin 43261 -> 0 bytes
+ .../crm_fit/morse_partial/profiles/strength.pdf    |  Bin 20332 -> 0 bytes
+ .../crm_fit/morse_partial/profiles/strength.png    |  Bin 52227 -> 0 bytes
+ paper/figures/crm_fit/morse_partial/settings.toml  |   44 -
+ .../morse_partial/snapshots/exact-000000.png       |  Bin 191960 -> 0 bytes
+ .../morse_partial/snapshots/exact-001111.png       |  Bin 198452 -> 0 bytes
+ .../morse_partial/snapshots/exact-002222.png       |  Bin 198566 -> 0 bytes
+ .../morse_partial/snapshots/exact-003333.png       |  Bin 199447 -> 0 bytes
+ .../morse_partial/snapshots/exact-004444.png       |  Bin 196067 -> 0 bytes
+ .../morse_partial/snapshots/exact-005556.png       |  Bin 197757 -> 0 bytes
+ .../morse_partial/snapshots/exact-006667.png       |  Bin 198346 -> 0 bytes
+ .../morse_partial/snapshots/predicted-000000.png   |  Bin 190454 -> 0 bytes
+ .../morse_partial/snapshots/predicted-001111.png   |  Bin 196856 -> 0 bytes
+ .../morse_partial/snapshots/predicted-002222.png   |  Bin 196801 -> 0 bytes
+ .../morse_partial/snapshots/predicted-003333.png   |  Bin 197835 -> 0 bytes
+ .../morse_partial/snapshots/predicted-004444.png   |  Bin 194390 -> 0 bytes
+ .../morse_partial/snapshots/predicted-005556.png   |  Bin 196144 -> 0 bytes
+ .../morse_partial/snapshots/predicted-006667.png   |  Bin 196568 -> 0 bytes
+ paper/figures/crm_fit/optimization-progression.pdf |  Bin 19959 -> 0 bytes
+ paper/figures/crm_fit/optimization-progression.png |  Bin 59910 -> 0 bytes
+ paper/figures/crm_fit/plot_profiles.py             |  298 ---
+ paper/figures/crm_fit/profiles/profile-damping.pdf |  Bin 23438 -> 0 bytes
+ paper/figures/crm_fit/profiles/profile-damping.png |  Bin 53175 -> 0 bytes
+ .../crm_fit/profiles/profile-exponent-m.pdf        |  Bin 21275 -> 0 bytes
+ .../crm_fit/profiles/profile-exponent-m.png        |  Bin 49684 -> 0 bytes
+ .../crm_fit/profiles/profile-exponent-n.pdf        |  Bin 21278 -> 0 bytes
+ .../crm_fit/profiles/profile-exponent-n.png        |  Bin 51027 -> 0 bytes
+ .../crm_fit/profiles/profile-growth-rate-0.pdf     |  Bin 25749 -> 0 bytes
+ .../crm_fit/profiles/profile-growth-rate-0.png     |  Bin 59127 -> 0 bytes
+ .../crm_fit/profiles/profile-growth-rate-1.pdf     |  Bin 25741 -> 0 bytes
+ .../crm_fit/profiles/profile-growth-rate-1.png     |  Bin 61950 -> 0 bytes
+ .../crm_fit/profiles/profile-growth-rate-2.pdf     |  Bin 26905 -> 0 bytes
+ .../crm_fit/profiles/profile-growth-rate-2.png     |  Bin 63059 -> 0 bytes
+ .../crm_fit/profiles/profile-growth-rate-3.pdf     |  Bin 27848 -> 0 bytes
+ .../crm_fit/profiles/profile-growth-rate-3.png     |  Bin 61074 -> 0 bytes
+ .../crm_fit/profiles/profile-growth-rate-4.pdf     |  Bin 27331 -> 0 bytes
+ .../crm_fit/profiles/profile-growth-rate-4.png     |  Bin 72196 -> 0 bytes
+ .../crm_fit/profiles/profile-growth-rate-5.pdf     |  Bin 27003 -> 0 bytes
+ .../crm_fit/profiles/profile-growth-rate-5.png     |  Bin 62466 -> 0 bytes
+ .../profiles/profile-potential-stiffness.pdf       |  Bin 27151 -> 0 bytes
+ .../profiles/profile-potential-stiffness.png       |  Bin 70616 -> 0 bytes
+ paper/figures/crm_fit/profiles/profile-radius.pdf  |  Bin 25473 -> 0 bytes
+ paper/figures/crm_fit/profiles/profile-radius.png  |  Bin 79320 -> 0 bytes
+ .../figures/crm_fit/profiles/profile-strength.pdf  |  Bin 40522 -> 0 bytes
+ .../figures/crm_fit/profiles/profile-strength.png  |  Bin 89564 -> 0 bytes
+ paper/figures/orcid.pdf                            |  Bin 12397 -> 0 bytes
+ paper/figures/tikz-preamble.tex                    |   27 -
+ paper/main.tex                                     | 2455 --------------------
+ paper/onimage.dtx                                  |  315 ---
+ paper/onimage.sty                                  |  132 --
+ paper/plos2025.bst                                 | 1996 ----------------
+ paper/references.bib                               | 1870 ---------------
+ paper_segmentation_tracking/.gitignore             |   15 -
+ paper_segmentation_tracking/Makefile               |   36 -
+ paper_segmentation_tracking/arxiv.sty              |  263 ---
+ paper_segmentation_tracking/docs                   |    1 -
+ paper_segmentation_tracking/fake-figures/main.py   |  104 -
+ .../fake-figures/segmentation-benchmark.pdf        |  Bin 21888 -> 0 bytes
+ .../fake-figures/tracking-defects.pdf              |  Bin 24530 -> 0 bytes
+ paper_segmentation_tracking/figures                |    1 -
+ paper_segmentation_tracking/main.tex               |  355 ---
+ paper_segmentation_tracking/onimage.dtx            |  315 ---
+ paper_segmentation_tracking/onimage.sty            |  132 --
+ paper_segmentation_tracking/references.bib         |    0
+ pyproject.toml                                     |    5 +-
+ requirements.txt                                   |    2 +
+ src/agent.rs                                       |    4 +-
+ src/crm_fit/mod.rs                                 |    2 +
+ src/crm_fit/optimize.rs                            |   11 +-
+ src/crm_fit/predict.rs                             |    4 +-
+ src/crm_fit/settings.rs                            |   60 +-
+ src/imaging.rs                                     |    1 +
+ tests/test_crm_divide.py                           |    2 +-
+ tests/test_crm_gen_config.py                       |  102 +
+ tests/test_crm_gen_filters.py                      |  151 ++
+ tests/test_crm_gen_pipeline.py                     |   87 +
+ 862 files changed, 9148 insertions(+), 31027 deletions(-)
