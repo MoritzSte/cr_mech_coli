@@ -4,19 +4,13 @@ Configuration utilities for crm_gen.
 Provides functions for loading and managing TOML configuration files.
 """
 
-from pathlib import Path
 from typing import Dict, Any
 import tomllib
 
-
-def get_default_config_path() -> Path:
-    """
-    Get the path to the default configuration file.
-
-    Returns:
-        Path: Absolute path to the default_config.toml file.
-    """
-    return Path(__file__).parent / "default_config.toml"
+from .parameter_registry import (
+    get_param_names,
+    get_all_bounds,
+)
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
@@ -33,41 +27,20 @@ def load_config(config_path: str) -> Dict[str, Any]:
         return tomllib.load(f)
 
 
-def get_default_config() -> Dict[str, Any]:
-    """
-    Load the default configuration.
+# ---------------------------------------------------------------------------
+# Backward-compatible aliases — these now delegate to the registry
+# ---------------------------------------------------------------------------
 
-    Returns:
-        Dict[str, Any]: Default configuration dictionary.
-    """
-    default_path = get_default_config_path()
-    if default_path.exists():
-        return load_config(str(default_path))
-    else:
-        raise FileNotFoundError(f"Default config not found at: {default_path}")
+PARAM_NAMES = get_param_names()
 
+DEFAULT_OPTIMIZATION_BOUNDS = get_all_bounds()
 
-# Default values for optimization parameters
-DEFAULT_OPTIMIZATION_BOUNDS = [
-    (0.2, 0.6),  # bg_base_brightness
-    (0.0, 0.04),  # bg_gradient_strength
-    (0.01, 0.6),  # bac_halo_intensity
-    (1, 25),  # bg_noise_scale
-    (0.1, 3.0),  # psf_sigma
-    (1, 10000),  # peak_signal
-    (0.001, 0.05),  # gaussian_sigma
-]
-
-PARAM_NAMES = [
-    "bg_base_brightness",
-    "bg_gradient_strength",
-    "bac_halo_intensity",
-    "bg_noise_scale",
-    "psf_sigma",
-    "peak_signal",
-    "gaussian_sigma",
-]
-
-DEFAULT_METRIC_WEIGHTS = {"histogram_distance": 0.01, "ssim": 1.0, "psnr": 0.02}
+DEFAULT_METRIC_WEIGHTS = {
+    "histogram_distance": 0.01,
+    "ssim": 1.0,
+    "psnr": 0.02,
+    "ms_ssim": 0.0,
+    "power_spectrum": 0.0,
+}
 
 DEFAULT_REGION_WEIGHTS = {"background": 0.5, "foreground": 0.5}
