@@ -393,7 +393,6 @@ def process_frame_for_synthetic(args):
     bg_blur_sigma = background_config.get('blur_sigma', 0.8)
 
     # Halo params
-    halo_type = halo_config.get('halo_type', 'bright')
     halo_inner_width = halo_config.get('inner_width', 2.0)
     halo_outer_width = halo_config.get('outer_width', 50.0)
     halo_blur_sigma = halo_config.get('blur_sigma', 0.5)
@@ -434,7 +433,6 @@ def process_frame_for_synthetic(args):
         texture_scale=bg_texture_scale,
         bg_blur_sigma=bg_blur_sigma,
         # Halo params
-        halo_type=halo_type,
         halo_inner_width=halo_inner_width,
         halo_outer_width=halo_outer_width,
         halo_blur_sigma=halo_blur_sigma,
