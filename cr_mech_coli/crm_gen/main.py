@@ -122,6 +122,67 @@ def _build_fit_parser(subparsers, default_fit_config):
         default=str(default_fit_config) if default_fit_config.exists() else None,
         help="Path to fit TOML config file",
     )
+    fit_parser.add_argument(
+        "--auto-screen",
+        action="store_true",
+        default=False,
+        help="Run Morris+Sobol screening before optimization to auto-discover "
+        "relevant parameters",
+    )
+    fit_parser.add_argument(
+        "--screening-results",
+        type=str,
+        default=None,
+        help="Path to pre-computed screening results JSON (from 'crm_gen screen')",
+    )
+
+
+def _build_screen_parser(subparsers, default_fit_config):
+    """
+    Add the ``screen`` subcommand to the argument parser.
+
+    Args:
+        subparsers: Subparser group from argparse.
+        default_fit_config (Path): Default path to the fit config file.
+    """
+    screen_parser = subparsers.add_parser(
+        "screen",
+        help="Run sensitivity analysis to discover relevant parameters",
+        description="Run Morris screening (and optionally Sobol analysis) "
+        "on real microscope images to automatically discover which "
+        "parameters matter. Results can be loaded by 'crm_gen fit'.",
+    )
+    screen_parser.add_argument(
+        "input_dir",
+        type=str,
+        help="Directory containing real microscope images (searched recursively)",
+    )
+    screen_parser.add_argument(
+        "--config",
+        "-c",
+        type=str,
+        default=str(default_fit_config) if default_fit_config.exists() else None,
+        help="Path to fit TOML config file (uses [screening] section)",
+    )
+    screen_parser.add_argument(
+        "--skip-sobol",
+        action="store_true",
+        default=False,
+        help="Run Morris screening only, skip Sobol analysis",
+    )
+    screen_parser.add_argument(
+        "--num-images",
+        type=int,
+        default=None,
+        help="Limit screening to N representative images (default: from config or 2)",
+    )
+    screen_parser.add_argument(
+        "--output",
+        "-o",
+        type=str,
+        default=None,
+        help="Output path for screening results JSON (default: ./screening_results.json)",
+    )
 
 
 def _run_generate(config, config_path):
@@ -245,7 +306,6 @@ def _run_clone(args, config):
         apply_psf=synthetic_config.get("apply_psf", True),
         apply_poisson=synthetic_config.get("apply_poisson", True),
         apply_gaussian=synthetic_config.get("apply_gaussian", True),
-        halo_type=halo_config.get("halo_type", "bright"),
         halo_inner_width=halo_config.get("inner_width", 2.0),
         halo_outer_width=halo_config.get("outer_width", 50.0),
         halo_blur_sigma=halo_config.get("blur_sigma", 0.5),
@@ -258,12 +318,81 @@ def _run_clone(args, config):
     )
 
 
+def _extract_weights(opt_config):
+    """Extract metric and region weights from the [optimization] config section."""
+    from .config import DEFAULT_METRIC_WEIGHTS, DEFAULT_REGION_WEIGHTS
+
+    mw = opt_config.get("metric_weights", {})
+    weights = {k: mw.get(k, v) for k, v in DEFAULT_METRIC_WEIGHTS.items()}
+
+    rw = opt_config.get("region_weights", {})
+    region_weights = {k: rw.get(k, v) for k, v in DEFAULT_REGION_WEIGHTS.items()}
+
+    return weights, region_weights
+
+
+def _run_screen(args, config, config_path):
+    """
+    Run sensitivity analysis to discover relevant parameters.
+
+    Args:
+        args: Parsed CLI arguments (input_dir, skip_sobol, num_images, output).
+        config (dict): Parsed TOML configuration (uses [screening] section).
+        config_path (Path): Path to the config file.
+    """
+    from .optimization import find_real_images
+    from .sensitivity import (
+        run_full_screening,
+        save_screening_results,
+    )
+
+    screen_config = config.get("screening", {})
+    opt_config = config.get("optimization", {})
+
+    # Screening parameters
+    num_trajectories = screen_config.get("num_trajectories", 10)
+    morris_threshold = screen_config.get("morris_threshold", 0.05)
+    run_sobol = not args.skip_sobol and screen_config.get("run_sobol", True)
+    sobol_n_samples = screen_config.get("sobol_n_samples", 128)
+    sobol_threshold = screen_config.get("sobol_threshold", 0.01)
+    num_images = args.num_images or screen_config.get("num_screening_images", 2)
+    n_vertices = opt_config.get("n_vertices", 8)
+    seed = opt_config.get("seed", 42)
+    workers = opt_config.get("workers", -1)
+
+    weights, region_weights = _extract_weights(opt_config)
+
+    # Find image pairs (limited to num_images for screening)
+    image_pairs = find_real_images(Path(args.input_dir), limit=num_images)
+
+    # Run screening
+    result = run_full_screening(
+        image_pairs=image_pairs,
+        weights=weights,
+        region_weights=region_weights,
+        num_trajectories=num_trajectories,
+        morris_threshold=morris_threshold,
+        run_sobol=run_sobol,
+        sobol_n_samples=sobol_n_samples,
+        sobol_threshold=sobol_threshold,
+        n_vertices=n_vertices,
+        seed=seed,
+        workers=workers,
+    )
+
+    # Save results
+    output_path = Path(args.output) if args.output else Path("./screening_results.json")
+    save_screening_results(result, output_path)
+
+    print(f"\nUse with fit: crm_gen fit {args.input_dir} --screening-results {output_path}")
+
+
 def _run_fit(args, config, config_path):
     """
     Optimize synthetic image parameters to match real microscope images.
 
     Args:
-        args: Parsed CLI arguments (input_dir).
+        args: Parsed CLI arguments (input_dir, auto_screen, screening_results).
         config (dict): Parsed fit TOML configuration ([optimization] section).
         config_path (Path): Path to the fit config file (copied to output dir).
     """
@@ -273,10 +402,8 @@ def _run_fit(args, config, config_path):
         compute_final_metrics,
         save_results,
         generate_all_synthetics,
-        DEFAULT_BOUNDS,
-        DEFAULT_WEIGHTS,
-        PARAM_NAMES,
     )
+    from .parameter_registry import get_param_names, PARAMETER_REGISTRY
     from .visualization import generate_comparison_plot, generate_detailed_plots
 
     opt_config = config.get("optimization", {})
@@ -296,35 +423,60 @@ def _run_fit(args, config, config_path):
     no_checkpoint = opt_config.get("no_checkpoint", False)
     save_all_synthetics = opt_config.get("save_all_synthetics", False)
 
-    # Metric weights
-    metric_weights_config = opt_config.get("metric_weights", {})
-    weights = {
-        "histogram_distance": metric_weights_config.get(
-            "histogram_distance", DEFAULT_WEIGHTS["histogram_distance"]
-        ),
-        "ssim": metric_weights_config.get("ssim", DEFAULT_WEIGHTS["ssim"]),
-        "psnr": metric_weights_config.get("psnr", DEFAULT_WEIGHTS["psnr"]),
-    }
+    # Metric and region weights
+    weights, region_weights = _extract_weights(opt_config)
 
-    # Region weights
-    region_weights_config = opt_config.get("region_weights", {})
-    region_weights = {
-        "background": region_weights_config.get("background", 0.5),
-        "foreground": region_weights_config.get("foreground", 0.5),
-    }
+    # --- Determine active parameters ---
+    active_param_names = None
+    fixed_params = None
+    screening_result = None
 
-    # Parameter bounds — read from config, fall back to DEFAULT_BOUNDS with warnings
+    if hasattr(args, "screening_results") and args.screening_results:
+        # Load pre-computed screening results
+        from .sensitivity import load_screening_results
+
+        print(f"Loading screening results from: {args.screening_results}")
+        screening_result = load_screening_results(Path(args.screening_results))
+        active_param_names = screening_result.active_params
+        fixed_params = screening_result.fixed_values
+        print(f"Active parameters: {len(active_param_names)}")
+        print(f"Fixed parameters: {len(fixed_params)}")
+
+    elif hasattr(args, "auto_screen") and args.auto_screen:
+        # Run screening inline before optimization
+        from .sensitivity import run_full_screening, save_screening_results
+
+        screen_config = config.get("screening", {})
+        num_screen_images = screen_config.get("num_screening_images", 2)
+        screen_pairs = find_real_images(Path(input_dir), limit=num_screen_images)
+
+        screening_result = run_full_screening(
+            image_pairs=screen_pairs,
+            weights=weights,
+            region_weights=region_weights,
+            num_trajectories=screen_config.get("num_trajectories", 10),
+            morris_threshold=screen_config.get("morris_threshold", 0.05),
+            run_sobol=screen_config.get("run_sobol", True),
+            sobol_n_samples=screen_config.get("sobol_n_samples", 128),
+            sobol_threshold=screen_config.get("sobol_threshold", 0.01),
+            n_vertices=n_vertices,
+            seed=seed,
+            workers=workers,
+        )
+        active_param_names = screening_result.active_params
+        fixed_params = screening_result.fixed_values
+
+    # Default to all registry parameters if no screening was used
+    if active_param_names is None:
+        active_param_names = get_param_names()
+
+    # Build bounds for active parameters
     bounds_config = opt_config.get("bounds", {})
-    bounds = []
-    for name, default_bound in zip(PARAM_NAMES, DEFAULT_BOUNDS):
-        if name in bounds_config:
-            bounds.append(tuple(bounds_config[name]))
-        else:
-            print(
-                f"Warning: bounds for '{name}' not found in config — "
-                f"using default {list(default_bound)}"
-            )
-            bounds.append(default_bound)
+    bounds = [
+        tuple(bounds_config[name]) if name in bounds_config
+        else PARAMETER_REGISTRY[name].bounds
+        for name in active_param_names
+    ]
 
     # Create output directory with timestamp
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -335,6 +487,13 @@ def _run_fit(args, config, config_path):
 
     output_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy(config_path, output_dir / "config.toml")
+
+    # Save screening results to output dir if available
+    if screening_result is not None:
+        from .sensitivity import save_screening_results
+
+        save_screening_results(screening_result, output_dir / "screening_results.json")
+
     print(f"Output directory: {output_dir}\n")
 
     # Find image pairs
@@ -353,14 +512,17 @@ def _run_fit(args, config, config_path):
         n_vertices=n_vertices,
         resume=resume,
         no_checkpoint=no_checkpoint,
+        active_param_names=active_param_names,
+        fixed_params=fixed_params,
     )
 
     # Compute final metrics
-    avg_metrics, per_image_metrics = compute_final_metrics(
+    avg_metrics, per_image_metrics, synth_cache = compute_final_metrics(
         image_pairs=image_pairs,
         params=results["parameters"],
         output_dir=output_dir,
         n_vertices=n_vertices,
+        weights=weights,
     )
 
     # Save results
@@ -377,7 +539,9 @@ def _run_fit(args, config, config_path):
         params=results["parameters"],
         output_dir=output_dir,
         n_vertices=n_vertices,
-        num_examples=4,
+        synth_cache=synth_cache,
+        active_param_names=active_param_names,
+        weights=weights,
     )
 
     # Generate detailed per-image plots
@@ -387,6 +551,8 @@ def _run_fit(args, config, config_path):
         per_image_metrics=per_image_metrics,
         output_dir=output_dir,
         n_vertices=n_vertices,
+        synth_cache=synth_cache,
+        active_param_names=active_param_names,
     )
 
     # Generate all synthetics if requested
@@ -430,6 +596,7 @@ def crm_gen_main():
     _build_run_parser(subparsers, default_gen_config)
     _build_clone_parser(subparsers, default_gen_config)
     _build_fit_parser(subparsers, default_fit_config)
+    _build_screen_parser(subparsers, default_fit_config)
 
     args = parser.parse_args()
 
@@ -461,3 +628,5 @@ def crm_gen_main():
         _run_clone(args, config)
     elif args.command == "fit":
         _run_fit(args, config, config_path)
+    elif args.command == "screen":
+        _run_screen(args, config, config_path)
