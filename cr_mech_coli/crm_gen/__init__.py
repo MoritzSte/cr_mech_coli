@@ -22,6 +22,15 @@ hyperparameters and search bounds only); the imaging parameters are the
 *output* of the fit. Default configs are in ``configs/``.
 """
 
+# Configure offscreen rendering for headless cluster environments.
+# Must be set BEFORE importing pyvista/vtk (i.e. before scene, optimization, etc.)
+import os as _os
+
+_os.environ.setdefault("PYVISTA_OFF_SCREEN", "true")
+_os.environ.setdefault("VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN", "1")
+_os.environ.setdefault("DISPLAY", "")
+_os.environ.setdefault("VTK_USE_OFFSCREEN_EGL", "0")
+
 # Core scene generation
 from .scene import (
     create_synthetic_scene,
@@ -38,12 +47,23 @@ from .pipeline import (
 # Config
 from .config import (
     load_config,
-    get_default_config,
-    get_default_config_path,
     PARAM_NAMES,
     DEFAULT_OPTIMIZATION_BOUNDS,
     DEFAULT_METRIC_WEIGHTS,
     DEFAULT_REGION_WEIGHTS,
+)
+
+# Parameter registry
+from .parameter_registry import (
+    PARAMETER_REGISTRY,
+    ParameterDef,
+    get_param_names,
+    get_all_bounds,
+    get_all_defaults,
+    get_bounds_for,
+    get_defaults_for,
+    build_full_params,
+    cast_param,
 )
 
 # Background generation
@@ -74,8 +94,22 @@ from .metrics import (
     compute_ssim,
     compute_psnr,
     compute_color_distribution,
+    compute_ms_ssim,
+    compute_power_spectrum_distance,
     load_image,
     plot_metrics,
+)
+
+# Sensitivity analysis
+from .sensitivity import (
+    run_morris_screening,
+    run_sobol_analysis,
+    run_full_screening,
+    save_screening_results,
+    load_screening_results,
+    ScreeningResult,
+    MorrisResult,
+    SobolResult,
 )
 
 # CLI entry point
