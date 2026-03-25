@@ -128,22 +128,125 @@ def compute_psnr(
     return {"psnr": float(psnr_value)}
 
 
+def compute_ms_ssim(
+    image1: np.ndarray,
+    image2: np.ndarray,
+    data_range: float = 1.0,
+    weights: np.ndarray = None,
+) -> Dict[str, float]:
+    """
+    Compute Multi-Scale SSIM between two images.
+
+    Evaluates structural similarity at multiple resolutions by successively
+    downsampling. More robust than single-scale SSIM for microscopy where
+    features exist at multiple scales.
+
+    Args:
+        image1: First image (float [0,1]).
+        image2: Second image (float [0,1]).
+        data_range: Data range (1.0 for float images).
+        weights: Per-scale weights. Default uses 5 scales with the
+            standard weights from Wang et al. (2003).
+
+    Returns:
+        dict with 'ms_ssim' score (higher is better, max=1.0).
+    """
+    from scipy.ndimage import gaussian_filter
+
+    if weights is None:
+        weights = np.array([0.0448, 0.2856, 0.3001, 0.2363, 0.1333])
+
+    levels = len(weights)
+    css = []  # contrast-structure per scale
+    im1, im2 = image1.astype(np.float64), image2.astype(np.float64)
+
+    for i in range(levels):
+        s = ssim(im1, im2, data_range=data_range, full=True)
+        if isinstance(s, tuple):
+            ssim_val, ssim_map = s
+        else:
+            ssim_val = float(s)
+
+        if i < levels - 1:
+            # Compute contrast * structure (SSIM without luminance)
+            # Approximate: use SSIM itself at intermediate scales
+            css.append(max(ssim_val, 0.0))
+            # Downsample by 2x with Gaussian anti-aliasing
+            im1 = gaussian_filter(im1, sigma=1.0)[::2, ::2]
+            im2 = gaussian_filter(im2, sigma=1.0)[::2, ::2]
+            if min(im1.shape) < 11:
+                # Image too small for further downsampling
+                # Pad remaining scales with current value
+                for j in range(i + 1, levels):
+                    css.append(max(ssim_val, 0.0))
+                break
+        else:
+            css.append(max(ssim_val, 0.0))
+
+    # Weighted geometric mean
+    ms_ssim_val = np.prod(np.array(css[: len(weights)]) ** weights)
+    return {"ms_ssim": float(ms_ssim_val)}
+
+
+def compute_power_spectrum_distance(
+    image1: np.ndarray, image2: np.ndarray
+) -> Dict[str, float]:
+    """
+    Compute power spectrum distance between two images.
+
+    Compares frequency-domain content via the magnitude of 2D FFT.
+    Captures noise characteristics and texture patterns that spatial
+    metrics miss.
+
+    Args:
+        image1: First image (float [0,1]).
+        image2: Second image (float [0,1]).
+
+    Returns:
+        dict with 'power_spectrum_distance' (lower is better).
+    """
+    # Compute 2D FFT and shift zero-frequency to center
+    fft1 = np.fft.fftshift(np.fft.fft2(image1))
+    fft2 = np.fft.fftshift(np.fft.fft2(image2))
+
+    # Power spectra (log scale to compress dynamic range)
+    ps1 = np.log1p(np.abs(fft1))
+    ps2 = np.log1p(np.abs(fft2))
+
+    # Normalize each spectrum
+    ps1 = ps1 / (ps1.sum() + 1e-10)
+    ps2 = ps2 / (ps2.sum() + 1e-10)
+
+    # L1 distance between normalized power spectra
+    distance = float(np.sum(np.abs(ps1 - ps2)))
+
+    return {"power_spectrum_distance": distance}
+
+
 def compute_all_metrics(
-    original: np.ndarray, synthetic: np.ndarray, bins: int = 256
+    original: np.ndarray,
+    synthetic: np.ndarray,
+    bins: int = 256,
+    include_ms_ssim: bool = False,
+    include_power_spectrum: bool = False,
 ) -> Dict[str, any]:
     """
     Compute all metrics comparing original and synthetic images.
 
-    This is the main method that computes all three metrics in one call.
+    This is the main method that computes all three metrics in one call,
+    with optional additional metrics.
 
     Args:
         original (np.ndarray): Original microscope image (float [0,1]).
         synthetic (np.ndarray): Synthetic image (float [0,1]).
         bins (int): Number of bins for histogram.
+        include_ms_ssim (bool): If True, also compute Multi-Scale SSIM.
+        include_power_spectrum (bool): If True, also compute power spectrum distance.
 
     Returns:
         dict: Dictionary containing 'color_distribution', 'ssim', 'psnr',
-            and 'summary' statistics.
+            and 'summary' statistics.  Optionally includes 'ms_ssim' and/or
+            'power_spectrum'.
     """
     # Handle shape mismatches (grayscale vs RGB)
     # Convert RGB to grayscale if needed
@@ -178,6 +281,18 @@ def compute_all_metrics(
         },
     }
 
+    if include_ms_ssim:
+        ms_ssim_result = compute_ms_ssim(original, synthetic)
+        results["ms_ssim"] = ms_ssim_result
+        results["summary"]["ms_ssim_score"] = ms_ssim_result["ms_ssim"]
+
+    if include_power_spectrum:
+        ps_result = compute_power_spectrum_distance(original, synthetic)
+        results["power_spectrum"] = ps_result
+        results["summary"]["power_spectrum_distance"] = ps_result[
+            "power_spectrum_distance"
+        ]
+
     return results
 
 
@@ -189,19 +304,25 @@ def save_metrics_json(metrics: Dict, output_path: Path) -> None:
         metrics (dict): Metrics dictionary from compute_all_metrics().
         output_path (Path): Path where to save the JSON file.
     """
-    # Convert numpy arrays to lists for JSON serialization
-    metrics_serializable = {
-        "summary": metrics["summary"],
-        "color_distribution": {
-            "hist1": metrics["color_distribution"]["hist1"].tolist(),
-            "hist2": metrics["color_distribution"]["hist2"].tolist(),
-            "bin_edges": metrics["color_distribution"]["bin_edges"].tolist(),
-            "histogram_diff": metrics["color_distribution"]["histogram_diff"].tolist(),
-            "histogram_distance": metrics["color_distribution"]["histogram_distance"],
-        },
-        "ssim": metrics["ssim"],
-        "psnr": metrics["psnr"],
-    }
+    # Dynamically convert all metrics for JSON serialization
+    metrics_serializable = {}
+    for key, value in metrics.items():
+        if isinstance(value, dict):
+            serialized = {}
+            for k, v in value.items():
+                if isinstance(v, np.ndarray):
+                    serialized[k] = v.tolist()
+                elif isinstance(v, (np.floating, np.integer)):
+                    serialized[k] = float(v)
+                else:
+                    serialized[k] = v
+            metrics_serializable[key] = serialized
+        elif isinstance(value, np.ndarray):
+            metrics_serializable[key] = value.tolist()
+        elif isinstance(value, (np.floating, np.integer)):
+            metrics_serializable[key] = float(value)
+        else:
+            metrics_serializable[key] = value
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -238,7 +359,12 @@ def plot_metrics(
     if len(synthetic.shape) == 3 and synthetic.shape[2] == 3:
         synthetic = np.mean(synthetic, axis=2)
 
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    has_ms_ssim = "ms_ssim_score" in metrics.get("summary", {})
+    has_power_spectrum = "power_spectrum_distance" in metrics.get("summary", {})
+    extra_panels = int(has_ms_ssim) + int(has_power_spectrum)
+    nrows = 2 + (1 if extra_panels > 0 else 0)
+
+    fig, axes = plt.subplots(nrows, 2, figsize=(14, 5 * nrows))
     fig.suptitle(title, fontsize=14, fontweight="bold")
 
     # 1. Color/Intensity Distribution (top-left)
@@ -347,6 +473,49 @@ def plot_metrics(
     h, w = original.shape[:2]
     ax.text(w // 2, h + 10, "Original", ha="center", fontsize=9, fontweight="bold")
     ax.text(w + w // 2, h + 10, "Synthetic", ha="center", fontsize=9, fontweight="bold")
+
+    # 5. Optional MS-SSIM panel
+    if has_ms_ssim:
+        ax = axes[2, 0]
+        ms_ssim_val = metrics["summary"]["ms_ssim_score"]
+        color = (
+            "#2ECC71" if ms_ssim_val > 0.9 else "#F39C12" if ms_ssim_val > 0.7 else "#E74C3C"
+        )
+        ax.text(
+            0.5, 0.5, f"{ms_ssim_val:.4f}", ha="center", va="center",
+            fontsize=48, fontweight="bold", color=color, transform=ax.transAxes,
+        )
+        ax.set_title("MS-SSIM Score\n(Multi-Scale Structural Similarity)",
+                      fontsize=11, fontweight="bold")
+        ax.text(
+            0.5, 0.25, "Range: 0 to 1 (higher is better)", ha="center",
+            va="center", fontsize=9, style="italic", transform=ax.transAxes, color="gray",
+        )
+        ax.axis("off")
+
+    # 6. Optional Power Spectrum panel
+    if has_power_spectrum:
+        col = 1 if has_ms_ssim else 0
+        ax = axes[2, col]
+        ps_val = metrics["summary"]["power_spectrum_distance"]
+        color = (
+            "#2ECC71" if ps_val < 0.05 else "#F39C12" if ps_val < 0.2 else "#E74C3C"
+        )
+        ax.text(
+            0.5, 0.5, f"{ps_val:.4f}", ha="center", va="center",
+            fontsize=40, fontweight="bold", color=color, transform=ax.transAxes,
+        )
+        ax.set_title("Power Spectrum Distance\n(Frequency Domain Similarity)",
+                      fontsize=11, fontweight="bold")
+        ax.text(
+            0.5, 0.25, "Lower is better", ha="center", va="center",
+            fontsize=9, style="italic", transform=ax.transAxes, color="gray",
+        )
+        ax.axis("off")
+
+    # Hide unused extra axes
+    if extra_panels == 1 and nrows == 3:
+        axes[2, 1].set_visible(False)
 
     plt.tight_layout()
 
