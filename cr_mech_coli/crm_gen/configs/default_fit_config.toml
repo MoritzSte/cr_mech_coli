@@ -19,6 +19,8 @@ save_all_synthetics = false             # Generate synthetic images for all pair
 histogram_distance = 0.01               # Weight for histogram L1 distance
 ssim = 1.0                              # Weight for SSIM (structural similarity)
 psnr = 0.02                             # Weight for PSNR (peak signal-to-noise ratio)
+ms_ssim = 0.0                           # Weight for Multi-Scale SSIM (0 = disabled)
+power_spectrum = 0.0                    # Weight for power spectrum distance (0 = disabled)
 
 [optimization.region_weights]
 background = 0.65                       # Weight for background region loss
@@ -27,10 +29,33 @@ foreground = 0.35                       # Weight for foreground region loss
 [optimization.bounds]
 # Search bounds [min, max] for each imaging parameter during optimisation.
 # These define the space explored by differential evolution.
-bg_base_brightness  = [0.2,   0.6  ]   # Background base brightness
-bg_gradient_strength = [0.0,  0.04 ]   # Illumination gradient intensity
-bac_halo_intensity  = [0.01,  0.6  ]   # Halo intensity around bacteria
-bg_noise_scale      = [1,     25   ]   # Background illumination noise scale
-psf_sigma           = [0.1,   3.0  ]   # Point Spread Function (PSF) blur sigma
-peak_signal         = [1,     10000]   # Peak photon count (Poisson noise)
-gaussian_sigma      = [0.001, 0.05 ]   # Gaussian readout noise sigma
+# Parameters not listed here fall back to registry defaults.
+bg_base_brightness      = [0.2,   0.6  ]   # Background base brightness
+bg_gradient_strength    = [0.0,   0.04 ]   # Illumination gradient intensity
+bg_noise_scale          = [1,     25   ]   # Background illumination noise scale
+texture_strength        = [0.0,   0.1  ]   # Fine texture strength
+texture_scale           = [0.5,   5.0  ]   # Texture smoothness
+bg_blur_sigma           = [0.1,   3.0  ]   # Background blur sigma
+dark_spot_intensity     = [0.0,   0.3  ]   # Dark spot intensity
+num_dark_spots_max      = [0,     20   ]   # Maximum dark spots
+bac_halo_intensity      = [0.0,   0.6  ]   # Halo intensity around bacteria
+halo_inner_width        = [0.5,   5.0  ]   # Inner halo width (pixels)
+halo_outer_width        = [5.0,   100.0]   # Outer halo width (pixels)
+halo_blur_sigma         = [0.1,   3.0  ]   # Halo blur sigma
+psf_sigma               = [0.1,   3.0  ]   # Point Spread Function blur sigma
+psf_size                = [5,     21   ]   # PSF kernel size (odd integer)
+peak_signal             = [1,     10000]   # Peak photon count (Poisson noise)
+gaussian_sigma          = [0.001, 0.05 ]   # Gaussian readout noise sigma
+brightness_noise_strength = [0.0, 0.5  ]   # Intra-cell brightness variation
+
+# =========================================================================
+# Screening configuration — used by `crm_gen screen` and `crm_gen fit --auto-screen`
+# =========================================================================
+
+[screening]
+num_trajectories = 10                   # Number of Morris trajectories
+morris_threshold = 0.05                 # Keep params with mu* > threshold * max(mu*)
+run_sobol = true                        # Run Sobol analysis after Morris
+sobol_n_samples = 128                   # Sobol base sample size (N)
+sobol_threshold = 0.01                  # Keep params with total-order ST > threshold
+num_screening_images = 2                # Number of representative images for screening
