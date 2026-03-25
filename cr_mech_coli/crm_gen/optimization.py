@@ -14,16 +14,7 @@ Uses scipy.optimize.differential_evolution with multi-threading for efficient
 global optimization across multiple CPU cores.
 """
 
-# Configure offscreen rendering for headless cluster environments
-# Must be set BEFORE importing pyvista/vtk
 import os
-
-os.environ["PYVISTA_OFF_SCREEN"] = "true"
-os.environ["VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN"] = "1"
-# Force OSMesa software rendering (avoids EGL/GPU permission issues on clusters)
-os.environ.setdefault("DISPLAY", "")
-os.environ.setdefault("VTK_USE_OFFSCREEN_EGL", "0")
-
 from pathlib import Path
 from datetime import datetime
 import json
@@ -39,32 +30,11 @@ import tifffile as tiff
 
 from .scene import create_synthetic_scene
 from .metrics import compute_all_metrics, load_image
-
-# ============================================================================
-# Constants
-# ============================================================================
-
-DEFAULT_BOUNDS = [
-    (0.2, 0.6),  # bg_base_brightness
-    (0.0, 0.04),  # bg_gradient_strength; Default: (0.0, 0.02)
-    (0.01, 0.6),  # bac_halo_intensity
-    (1, 25),  # bg_noise_scale (background illumination noise scale)
-    (0.1, 3.0),  # psf_sigma (optical blur)
-    (1, 10000),  # peak_signal (Poisson noise, higher = less noise)
-    (0.001, 0.05),  # gaussian_sigma (readout noise)
-]
-
-PARAM_NAMES = [
-    "bg_base_brightness",
-    "bg_gradient_strength",
-    "bac_halo_intensity",
-    "bg_noise_scale",
-    "psf_sigma",
-    "peak_signal",
-    "gaussian_sigma",
-]
-
-DEFAULT_WEIGHTS = {"histogram_distance": 0.01, "ssim": 1.0, "psnr": 0.02}
+from .config import DEFAULT_METRIC_WEIGHTS, DEFAULT_REGION_WEIGHTS
+from .parameter_registry import (
+    get_param_names,
+    build_full_params,
+)
 
 # ============================================================================
 # Checkpoint Manager for Differential Evolution
@@ -225,6 +195,86 @@ class DECheckpointManager:
 
 
 # ============================================================================
+# Shared evaluation helper
+# ============================================================================
+
+
+def evaluate_single_pair(
+    real_img_path,
+    mask_path,
+    params_dict,
+    temp_dir,
+    n_vertices,
+    weights,
+    region_weights,
+    include_ms_ssim=False,
+    include_power_spectrum=False,
+    save=True,
+):
+    """Generate a synthetic image for one (image, mask) pair and return the loss.
+
+    This is the single evaluation step shared by the DE optimizer and the
+    sensitivity-analysis screening objectives.
+
+    Args:
+        real_img_path: Path to the real microscope image.
+        mask_path: Path to the segmentation mask.
+        params_dict: Full parameter dict (all 17 keys).
+        temp_dir: Working directory for temporary files.
+        n_vertices: Number of vertices for cell shape extraction.
+        weights: Metric weights dict.
+        region_weights: Background/foreground region weights dict.
+        include_ms_ssim: Compute Multi-Scale SSIM.
+        include_power_spectrum: Compute power spectrum distance.
+        save: Whether to write output files to disk.
+
+    Returns:
+        float: Scalar loss for this image pair.
+    """
+    real_img_path = Path(real_img_path)
+    mask_path = Path(mask_path)
+
+    synthetic_img, synthetic_mask = create_synthetic_scene(
+        microscope_image_path=real_img_path,
+        segmentation_mask_path=mask_path,
+        output_dir=temp_dir,
+        n_vertices=n_vertices,
+        params=params_dict,
+        save=save,
+    )
+
+    if synthetic_img.dtype == np.uint8:
+        synthetic_img = synthetic_img.astype(np.float64) / 255.0
+
+    real_img = load_image(real_img_path)
+    original_mask = tiff.imread(mask_path)
+
+    metrics_kw = dict(
+        include_ms_ssim=include_ms_ssim,
+        include_power_spectrum=include_power_spectrum,
+    )
+    metrics_full = compute_all_metrics(real_img, synthetic_img, **metrics_kw)
+    metrics_bg = compute_all_metrics(
+        extract_masked_region(real_img, original_mask, "background"),
+        extract_masked_region(synthetic_img, synthetic_mask, "background"),
+        **metrics_kw,
+    )
+    metrics_fg = compute_all_metrics(
+        extract_masked_region(real_img, original_mask, "foreground"),
+        extract_masked_region(synthetic_img, synthetic_mask, "foreground"),
+        **metrics_kw,
+    )
+
+    return compute_weighted_loss(
+        metrics_full,
+        weights,
+        metrics_bg=metrics_bg,
+        metrics_fg=metrics_fg,
+        region_weights=region_weights,
+    )
+
+
+# ============================================================================
 # Picklable Objective Function Class (for cluster multiprocessing)
 # ============================================================================
 
@@ -235,9 +285,21 @@ class ObjectiveFunction:
 
     Wraps the synthetic image generation and metric computation into a callable
     that can be serialized for multiprocessing.
+
+    Supports both the legacy positional-index mode (7 fixed params) and the
+    new dynamic mode where *active_param_names* and *fixed_params* are provided.
     """
 
-    def __init__(self, image_pairs, weights, temp_base_dir, n_vertices, region_weights):
+    def __init__(
+        self,
+        image_pairs,
+        weights,
+        temp_base_dir,
+        n_vertices,
+        region_weights,
+        active_param_names: List[str] = None,
+        fixed_params: Dict = None,
+    ):
         """
         Initialize the objective function.
 
@@ -247,21 +309,27 @@ class ObjectiveFunction:
             temp_base_dir: Base directory for temporary worker files.
             n_vertices (int): Number of vertices for cell shape extraction.
             region_weights (dict): Weights for background and foreground regions.
+            active_param_names: Ordered list of parameter names being optimized.
+                When None, falls back to the full registry order.
+            fixed_params: Dict of parameter values not being optimized.
+                When None, uses registry defaults.
         """
         self.image_pairs = [(str(img), str(mask)) for img, mask in image_pairs]
         self.weights = weights
         self.temp_base_dir = str(temp_base_dir)
         self.n_vertices = n_vertices
         self.region_weights = region_weights
+        self.active_param_names = active_param_names or get_param_names()
+        self.fixed_params = fixed_params or {}
+        self.include_ms_ssim = weights.get("ms_ssim", 0.0) > 0
+        self.include_power_spectrum = weights.get("power_spectrum", 0.0) > 0
 
-    def __call__(self, params):
+    def __call__(self, x):
         """
         Evaluate the objective function for a given parameter vector.
 
         Args:
-            params: Parameter vector [bg_base_brightness, bg_gradient_strength,
-                bac_halo_intensity, bg_noise_scale, psf_sigma, peak_signal,
-                gaussian_sigma].
+            x: Parameter vector (same order as *active_param_names*).
 
         Returns:
             float: Average loss across all image pairs. Returns 1e10 on error.
@@ -271,51 +339,24 @@ class ObjectiveFunction:
             temp_dir = Path(self.temp_base_dir) / f"worker_{worker_id}"
             temp_dir.mkdir(exist_ok=True)
 
+            # Build the full parameter dict from active values + fixed
+            params_dict = build_full_params(
+                self.active_param_names, list(x), self.fixed_params
+            )
+
             total_loss = 0
             for real_img_path_str, mask_path_str in self.image_pairs:
-                real_img_path = Path(real_img_path_str)
-                mask_path = Path(mask_path_str)
-
-                synthetic_img, synthetic_mask = create_synthetic_scene(
-                    microscope_image_path=real_img_path,
-                    segmentation_mask_path=mask_path,
-                    output_dir=temp_dir,
+                loss = evaluate_single_pair(
+                    real_img_path=real_img_path_str,
+                    mask_path=mask_path_str,
+                    params_dict=params_dict,
+                    temp_dir=temp_dir,
                     n_vertices=self.n_vertices,
-                    bg_base_brightness=params[0],
-                    bg_gradient_strength=params[1],
-                    bac_halo_intensity=params[2],
-                    bg_noise_scale=int(params[3]),
-                    psf_sigma=params[4],
-                    peak_signal=params[5],
-                    gaussian_sigma=params[6],
-                )
-
-                if synthetic_img.dtype == np.uint8:
-                    synthetic_img = synthetic_img.astype(np.float64) / 255.0
-
-                real_img = load_image(real_img_path)
-                original_mask = tiff.imread(mask_path)
-
-                real_fg = extract_masked_region(real_img, original_mask, "foreground")
-                synth_fg = extract_masked_region(
-                    synthetic_img, synthetic_mask, "foreground"
-                )
-
-                real_bg = extract_masked_region(real_img, original_mask, "background")
-                synth_bg = extract_masked_region(
-                    synthetic_img, synthetic_mask, "background"
-                )
-
-                metrics_fg = compute_all_metrics(real_fg, synth_fg)
-                metrics_bg = compute_all_metrics(real_bg, synth_bg)
-                metrics_full = compute_all_metrics(real_img, synthetic_img)
-
-                loss = compute_weighted_loss(
-                    metrics_full,
-                    self.weights,
-                    metrics_bg=metrics_bg,
-                    metrics_fg=metrics_fg,
+                    weights=self.weights,
                     region_weights=self.region_weights,
+                    include_ms_ssim=self.include_ms_ssim,
+                    include_power_spectrum=self.include_power_spectrum,
+                    save=False,
                 )
                 total_loss += loss
 
@@ -415,15 +456,21 @@ def compute_weighted_loss(
         ssim_score = summary["ssim_score"]
         psnr_db = summary["psnr_db"]
 
-        loss_hist = weights["histogram_distance"] * hist_dist
-        loss_ssim = weights["ssim"] * (1.0 - ssim_score)
-        loss_psnr = weights["psnr"] * (1.0 / max(psnr_db, 1.0))
+        loss = (
+            weights["histogram_distance"] * hist_dist
+            + weights["ssim"] * (1.0 - ssim_score)
+            + weights["psnr"] * (1.0 / max(psnr_db, 1.0))
+        )
+        if "ms_ssim_score" in summary and weights.get("ms_ssim", 0.0) > 0:
+            loss += weights["ms_ssim"] * (1.0 - summary["ms_ssim_score"])
+        if "power_spectrum_distance" in summary and weights.get("power_spectrum", 0.0) > 0:
+            loss += weights["power_spectrum"] * summary["power_spectrum_distance"]
 
-        return loss_hist + loss_ssim + loss_psnr
+        return loss
 
     if metrics_bg is not None and metrics_fg is not None:
         if region_weights is None:
-            region_weights = {"background": 0.5, "foreground": 0.5}
+            region_weights = DEFAULT_REGION_WEIGHTS
 
         bg_loss = compute_loss_from_summary(metrics_bg["summary"])
         fg_loss = compute_loss_from_summary(metrics_fg["summary"])
@@ -455,16 +502,11 @@ def extract_masked_region(
     if len(mask.shape) == 3:
         mask = np.max(mask, axis=2)
 
-    if len(image.shape) == 2 and len(mask.shape) == 2:
-        if image.shape != mask.shape:
-            raise ValueError(
-                f"Image and mask shapes must match: {image.shape} vs {mask.shape}"
-            )
-    elif len(image.shape) == 2:
-        if image.shape != mask.shape:
-            raise ValueError(
-                f"Image and mask shapes must match: {image.shape} vs {mask.shape}"
-            )
+    img_spatial = image.shape[:2]
+    if img_spatial != mask.shape[:2]:
+        raise ValueError(
+            f"Image and mask spatial shapes must match: {img_spatial} vs {mask.shape[:2]}"
+        )
 
     extracted = image.copy()
 
@@ -492,6 +534,8 @@ def optimize_parameters(
     n_vertices: int = 8,
     resume: bool = False,
     no_checkpoint: bool = False,
+    active_param_names: List[str] = None,
+    fixed_params: Dict = None,
 ) -> Dict:
     """
     Optimize synthetic image parameters using differential evolution.
@@ -511,17 +555,29 @@ def optimize_parameters(
         n_vertices (int): Number of vertices for cell shape extraction.
         resume (bool): If True, resume from latest checkpoint.
         no_checkpoint (bool): If True, disable checkpointing.
+        active_param_names: Ordered list of parameter names to optimize.
+            When None, uses the full registry.
+        fixed_params: Dict of parameter values not being optimized.
+            When None, uses registry defaults.
 
     Returns:
         Dict: Optimization results including 'parameters', 'optimization_info',
             'bounds', and 'weights'.
     """
+    if active_param_names is None:
+        active_param_names = get_param_names()
+    if fixed_params is None:
+        fixed_params = {}
+
     print("\n" + "=" * 80)
     print("STARTING PARAMETER OPTIMIZATION")
     print("=" * 80)
     print(f"Number of images: {len(image_pairs)}")
+    print(f"Active parameters: {len(active_param_names)}")
+    if fixed_params:
+        print(f"Fixed parameters: {len(fixed_params)}")
     print("Parameter bounds:")
-    for name, (low, high) in zip(PARAM_NAMES, bounds):
+    for name, (low, high) in zip(active_param_names, bounds):
         print(f"  {name}: [{low}, {high}]")
     print("Metric weights:")
     for key, value in weights.items():
@@ -545,6 +601,8 @@ def optimize_parameters(
             temp_base_dir=temp_base_dir,
             n_vertices=n_vertices,
             region_weights=region_weights,
+            active_param_names=active_param_names,
+            fixed_params=fixed_params,
         )
 
         checkpoint_dir = Path("./checkpoints")
@@ -617,10 +675,10 @@ def optimize_parameters(
             xk = intermediate_result.x
             if current_iter % 5 == 0:
                 print()
-                print(
-                    f"  └─ Params: bg={xk[0]:.3f}, grad={xk[1]:.5f}, halo={xk[2]:.3f}, noise={int(xk[3])}, "
-                    f"psf={xk[4]:.2f}, peak={xk[5]:.0f}, gauss={xk[6]:.4f}"
-                )
+                parts = [
+                    f"{n}={v:.4g}" for n, v in zip(active_param_names, xk)
+                ]
+                print(f"  └─ Params: {', '.join(parts)}")
 
         print("\n" + "┌" + "─" * 78 + "┐")
         print("│" + " " * 25 + "OPTIMIZATION RUNNING" + " " * 33 + "│")
@@ -661,9 +719,18 @@ def optimize_parameters(
             f"Optimization duration: {elapsed_time / 60:.2f} minutes ({elapsed_time:.1f} seconds)"
         )
         print("\nOptimized parameters:")
-        for name, value in zip(PARAM_NAMES, result.x):
+        for name, value in zip(active_param_names, result.x):
             print(f"  {name}: {value:.6f}")
+        if fixed_params:
+            print("Fixed parameters:")
+            for name, value in fixed_params.items():
+                print(f"  {name}: {value}")
         print("=" * 80 + "\n")
+
+        # Build full parameter dict (active + fixed)
+        full_params = build_full_params(
+            active_param_names, list(result.x), fixed_params
+        )
 
         optimization_results = {
             "timestamp": datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
@@ -676,16 +743,21 @@ def optimize_parameters(
                 "optimization_duration_minutes": float(elapsed_time / 60),
                 "success": bool(result.success),
                 "message": result.message,
+                "active_param_names": active_param_names,
             },
             "parameters": {
-                name: float(value) for name, value in zip(PARAM_NAMES, result.x)
+                name: float(value) for name, value in full_params.items()
             },
             "bounds": {
                 name: [float(low), float(high)]
-                for name, (low, high) in zip(PARAM_NAMES, bounds)
+                for name, (low, high) in zip(active_param_names, bounds)
             },
             "weights": weights,
         }
+        if fixed_params:
+            optimization_results["fixed_params"] = {
+                k: float(v) for k, v in fixed_params.items()
+            }
 
         return optimization_results
 
@@ -700,7 +772,8 @@ def compute_final_metrics(
     params: Dict,
     output_dir: Path,
     n_vertices: int,
-) -> Tuple[Dict, List[Dict]]:
+    weights: Dict = None,
+) -> Tuple[Dict, List[Dict], Dict]:
     """
     Compute final metrics for all images with optimized parameters.
 
@@ -712,116 +785,118 @@ def compute_final_metrics(
         params (Dict): Optimized parameter dictionary.
         output_dir (Path): Output directory for temporary files.
         n_vertices (int): Number of vertices for cell shape extraction.
+        weights (Dict): Metric weights. When provided, metrics with weight > 0
+            for ``ms_ssim`` or ``power_spectrum`` are included in the report.
 
     Returns:
-        Tuple[Dict, List[Dict]]: (average_metrics, per_image_metrics) where
-            average_metrics contains mean values and per_image_metrics is a list
-            of per-image metric dictionaries.
+        Tuple[Dict, List[Dict], Dict]: (average_metrics, per_image_metrics, synth_cache)
+            where average_metrics contains mean values, per_image_metrics is a list
+            of per-image metric dictionaries, and synth_cache maps image names to
+            (synthetic_img_float, synthetic_mask) tuples for reuse by visualization.
     """
     print("\nComputing final metrics with optimized parameters...")
 
-    temp_dir = output_dir / "temp"
-    temp_dir.mkdir(exist_ok=True)
+    include_ms_ssim = weights.get("ms_ssim", 0.0) > 0 if weights else False
+    include_power_spectrum = weights.get("power_spectrum", 0.0) > 0 if weights else False
+    metrics_kw = dict(
+        include_ms_ssim=include_ms_ssim,
+        include_power_spectrum=include_power_spectrum,
+    )
 
     per_image_metrics = []
+    synth_cache = {}
 
-    try:
-        for real_img_path, mask_path in tqdm(image_pairs, desc="Computing metrics"):
-            synthetic_img, synthetic_mask = create_synthetic_scene(
-                microscope_image_path=real_img_path,
-                segmentation_mask_path=mask_path,
-                output_dir=temp_dir,
-                n_vertices=n_vertices,
-                bg_base_brightness=params["bg_base_brightness"],
-                bg_gradient_strength=params["bg_gradient_strength"],
-                bac_halo_intensity=params["bac_halo_intensity"],
-                bg_noise_scale=int(params["bg_noise_scale"]),
-                psf_sigma=params["psf_sigma"],
-                peak_signal=params["peak_signal"],
-                gaussian_sigma=params["gaussian_sigma"],
-            )
+    for real_img_path, mask_path in tqdm(image_pairs, desc="Computing metrics"):
+        synthetic_img, synthetic_mask = create_synthetic_scene(
+            microscope_image_path=real_img_path,
+            segmentation_mask_path=mask_path,
+            output_dir=None,
+            n_vertices=n_vertices,
+            params=params,
+            save=False,
+        )
 
-            if synthetic_img.dtype == np.uint8:
-                synthetic_img = synthetic_img.astype(np.float64) / 255.0
+        if synthetic_img.dtype == np.uint8:
+            synthetic_img = synthetic_img.astype(np.float64) / 255.0
 
-            real_img = load_image(real_img_path)
-            original_mask = tiff.imread(mask_path)
+        synth_cache[real_img_path.name] = (synthetic_img, synthetic_mask)
 
-            real_fg = extract_masked_region(real_img, original_mask, "foreground")
-            real_bg = extract_masked_region(real_img, original_mask, "background")
+        real_img = load_image(real_img_path)
+        original_mask = tiff.imread(mask_path)
 
-            synth_fg = extract_masked_region(
-                synthetic_img, synthetic_mask, "foreground"
-            )
-            synth_bg = extract_masked_region(
-                synthetic_img, synthetic_mask, "background"
-            )
+        real_fg = extract_masked_region(real_img, original_mask, "foreground")
+        real_bg = extract_masked_region(real_img, original_mask, "background")
 
-            metrics_full = compute_all_metrics(real_img, synthetic_img)
-            metrics_fg = compute_all_metrics(real_fg, synth_fg)
-            metrics_bg = compute_all_metrics(real_bg, synth_bg)
+        synth_fg = extract_masked_region(
+            synthetic_img, synthetic_mask, "foreground"
+        )
+        synth_bg = extract_masked_region(
+            synthetic_img, synthetic_mask, "background"
+        )
 
-            per_image_metrics.append(
-                {
-                    "image_name": real_img_path.name,
-                    "full_histogram_distance": metrics_full["summary"][
-                        "histogram_distance"
-                    ],
-                    "full_ssim_score": metrics_full["summary"]["ssim_score"],
-                    "full_psnr_db": metrics_full["summary"]["psnr_db"],
-                    "fg_histogram_distance": metrics_fg["summary"][
-                        "histogram_distance"
-                    ],
-                    "fg_ssim_score": metrics_fg["summary"]["ssim_score"],
-                    "fg_psnr_db": metrics_fg["summary"]["psnr_db"],
-                    "bg_histogram_distance": metrics_bg["summary"][
-                        "histogram_distance"
-                    ],
-                    "bg_ssim_score": metrics_bg["summary"]["ssim_score"],
-                    "bg_psnr_db": metrics_bg["summary"]["psnr_db"],
-                }
-            )
+        metrics_full = compute_all_metrics(real_img, synthetic_img, **metrics_kw)
+        metrics_fg = compute_all_metrics(real_fg, synth_fg, **metrics_kw)
+        metrics_bg = compute_all_metrics(real_bg, synth_bg, **metrics_kw)
 
-    finally:
-        if temp_dir.exists():
-            shutil.rmtree(temp_dir)
+        entry = {
+            "image_name": real_img_path.name,
+            "full_histogram_distance": metrics_full["summary"]["histogram_distance"],
+            "full_ssim_score": metrics_full["summary"]["ssim_score"],
+            "full_psnr_db": metrics_full["summary"]["psnr_db"],
+            "fg_histogram_distance": metrics_fg["summary"]["histogram_distance"],
+            "fg_ssim_score": metrics_fg["summary"]["ssim_score"],
+            "fg_psnr_db": metrics_fg["summary"]["psnr_db"],
+            "bg_histogram_distance": metrics_bg["summary"]["histogram_distance"],
+            "bg_ssim_score": metrics_bg["summary"]["ssim_score"],
+            "bg_psnr_db": metrics_bg["summary"]["psnr_db"],
+        }
+        if "ms_ssim_score" in metrics_full["summary"]:
+            entry["full_ms_ssim"] = metrics_full["summary"]["ms_ssim_score"]
+            entry["fg_ms_ssim"] = metrics_fg["summary"]["ms_ssim_score"]
+            entry["bg_ms_ssim"] = metrics_bg["summary"]["ms_ssim_score"]
+        if "power_spectrum_distance" in metrics_full["summary"]:
+            entry["full_power_spectrum"] = metrics_full["summary"]["power_spectrum_distance"]
+            entry["fg_power_spectrum"] = metrics_fg["summary"]["power_spectrum_distance"]
+            entry["bg_power_spectrum"] = metrics_bg["summary"]["power_spectrum_distance"]
+        per_image_metrics.append(entry)
 
-    avg_metrics = {
-        "full_histogram_distance": np.mean(
-            [m["full_histogram_distance"] for m in per_image_metrics]
-        ),
-        "full_ssim_score": np.mean([m["full_ssim_score"] for m in per_image_metrics]),
-        "full_psnr_db": np.mean([m["full_psnr_db"] for m in per_image_metrics]),
-        "fg_histogram_distance": np.mean(
-            [m["fg_histogram_distance"] for m in per_image_metrics]
-        ),
-        "fg_ssim_score": np.mean([m["fg_ssim_score"] for m in per_image_metrics]),
-        "fg_psnr_db": np.mean([m["fg_psnr_db"] for m in per_image_metrics]),
-        "bg_histogram_distance": np.mean(
-            [m["bg_histogram_distance"] for m in per_image_metrics]
-        ),
-        "bg_ssim_score": np.mean([m["bg_ssim_score"] for m in per_image_metrics]),
-        "bg_psnr_db": np.mean([m["bg_psnr_db"] for m in per_image_metrics]),
-    }
+    # Dynamically average all numeric keys
+    avg_metrics = {}
+    if per_image_metrics:
+        keys = [k for k in per_image_metrics[0] if k != "image_name"]
+        for k in keys:
+            avg_metrics[k] = float(np.mean([m[k] for m in per_image_metrics]))
 
     print("\nAverage metrics across all images:")
     print(
-        f"  Full Image - Histogram: {avg_metrics['full_histogram_distance']:.4f}, "
-        f"SSIM: {avg_metrics['full_ssim_score']:.4f}, "
-        f"PSNR: {avg_metrics['full_psnr_db']:.2f} dB"
+        f"  Full Image - Histogram: {avg_metrics.get('full_histogram_distance', 0):.4f}, "
+        f"SSIM: {avg_metrics.get('full_ssim_score', 0):.4f}, "
+        f"PSNR: {avg_metrics.get('full_psnr_db', 0):.2f} dB"
     )
     print(
-        f"  Foreground - Histogram: {avg_metrics['fg_histogram_distance']:.4f}, "
-        f"SSIM: {avg_metrics['fg_ssim_score']:.4f}, "
-        f"PSNR: {avg_metrics['fg_psnr_db']:.2f} dB"
+        f"  Foreground - Histogram: {avg_metrics.get('fg_histogram_distance', 0):.4f}, "
+        f"SSIM: {avg_metrics.get('fg_ssim_score', 0):.4f}, "
+        f"PSNR: {avg_metrics.get('fg_psnr_db', 0):.2f} dB"
     )
     print(
-        f"  Background - Histogram: {avg_metrics['bg_histogram_distance']:.4f}, "
-        f"SSIM: {avg_metrics['bg_ssim_score']:.4f}, "
-        f"PSNR: {avg_metrics['bg_psnr_db']:.2f} dB"
+        f"  Background - Histogram: {avg_metrics.get('bg_histogram_distance', 0):.4f}, "
+        f"SSIM: {avg_metrics.get('bg_ssim_score', 0):.4f}, "
+        f"PSNR: {avg_metrics.get('bg_psnr_db', 0):.2f} dB"
     )
+    if include_ms_ssim:
+        print(
+            f"  MS-SSIM    - Full: {avg_metrics.get('full_ms_ssim', 0):.4f}, "
+            f"FG: {avg_metrics.get('fg_ms_ssim', 0):.4f}, "
+            f"BG: {avg_metrics.get('bg_ms_ssim', 0):.4f}"
+        )
+    if include_power_spectrum:
+        print(
+            f"  PSD        - Full: {avg_metrics.get('full_power_spectrum', 0):.4f}, "
+            f"FG: {avg_metrics.get('fg_power_spectrum', 0):.4f}, "
+            f"BG: {avg_metrics.get('bg_power_spectrum', 0):.4f}"
+        )
 
-    return avg_metrics, per_image_metrics
+    return avg_metrics, per_image_metrics, synth_cache
 
 
 def save_results(
@@ -847,21 +922,8 @@ def save_results(
 
     csv_path = output_dir / "per_image_metrics.csv"
     with open(csv_path, "w", newline="") as f:
-        writer = csv.DictWriter(
-            f,
-            fieldnames=[
-                "image_name",
-                "full_histogram_distance",
-                "full_ssim_score",
-                "full_psnr_db",
-                "fg_histogram_distance",
-                "fg_ssim_score",
-                "fg_psnr_db",
-                "bg_histogram_distance",
-                "bg_ssim_score",
-                "bg_psnr_db",
-            ],
-        )
+        fieldnames = list(per_image_metrics[0].keys()) if per_image_metrics else []
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(per_image_metrics)
     print(f"  Saved: {csv_path.name}")
@@ -893,13 +955,7 @@ def generate_all_synthetics(
             segmentation_mask_path=mask_path,
             output_dir=synth_dir,
             n_vertices=n_vertices,
-            bg_base_brightness=params["bg_base_brightness"],
-            bg_gradient_strength=params["bg_gradient_strength"],
-            bac_halo_intensity=params["bac_halo_intensity"],
-            bg_noise_scale=int(params["bg_noise_scale"]),
-            psf_sigma=params["psf_sigma"],
-            peak_signal=params["peak_signal"],
-            gaussian_sigma=params["gaussian_sigma"],
+            params=params,
         )
 
     print(f"  Saved synthetic images to: {synth_dir}")
