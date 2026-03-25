@@ -8,7 +8,6 @@ Optionally overlays multi-scale spatial noise for intra-cell variation.
 """
 
 import numpy as np
-import random
 from scipy.ndimage import gaussian_filter, zoom, label
 from typing import Dict
 
@@ -148,8 +147,7 @@ def add_brightness_noise(
     if noise_strength <= 0.0:
         return brightness_map
 
-    if seed is not None:
-        np.random.seed(seed)
+    rng = np.random.default_rng(seed)
 
     h, w = brightness_map.shape
 
@@ -163,7 +161,7 @@ def add_brightness_noise(
         # Coarse noise grid
         octave_h = max(h // (frequency * 8), 4)
         octave_w = max(w // (frequency * 8), 4)
-        octave_noise = np.random.randn(octave_h, octave_w)
+        octave_noise = rng.standard_normal((octave_h, octave_w))
         octave_noise = gaussian_filter(octave_noise, sigma=1.0)
 
         # Resize to full resolution
@@ -317,6 +315,8 @@ def compute_age_based_brightness(
     if len(cell_ages) == 0:
         return brightness_image
 
+    rng = np.random.default_rng()
+
     # Determine max age for normalization
     ages = list(cell_ages.values())
     if max_age is None:
@@ -349,7 +349,7 @@ def compute_age_based_brightness(
         )
 
         # Vary brightness between cells by adding small random variation (±10% of the range)
-        variation = random.uniform(0.9, 1.1)
+        variation = rng.uniform(0.9, 1.1)
 
         brightness_image[cell_mask] = brightness * variation
 
