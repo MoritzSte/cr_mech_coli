@@ -64,7 +64,7 @@ class MorrisResult:
     sigma: Dict[str, float]  # standard deviation of elementary effects
     active_params: List[str]  # params that passed the threshold
     inactive_params: List[str]  # params eliminated
-    threshold: float
+    top_n: int
     num_evaluations: int
 
 
@@ -77,7 +77,7 @@ class SobolResult:
     st: Dict[str, float]  # total-order indices
     active_params: List[str]
     inactive_params: List[str]
-    threshold: float
+    top_n: int
     num_evaluations: int
 
 
@@ -215,7 +215,7 @@ def run_morris_screening(
     weights: Dict[str, float] = None,
     region_weights: Dict[str, float] = None,
     num_trajectories: int = 10,
-    threshold: float = 0.05,
+    top_n: int = 10,
     n_vertices: int = 8,
     seed: int = 42,
     workers: int = 1,
@@ -229,8 +229,7 @@ def run_morris_screening(
         weights: Metric weights (histogram_distance, ssim, psnr).
         region_weights: Background/foreground weights.
         num_trajectories: Number of Morris trajectories (default 10).
-        threshold: Importance threshold — keep params with
-            mu* > threshold * max(mu*).  Default 0.05 (5 %).
+        top_n: Keep the *top_n* parameters with highest mu*.
         n_vertices: Vertices per cell for shape extraction.
         seed: Random seed.
         workers: Number of parallel workers.  1 = sequential,
@@ -288,21 +287,21 @@ def run_morris_screening(
         mu_star = {n: float(v) for n, v in zip(param_names, si["mu_star"])}
         sigma = {n: float(v) for n, v in zip(param_names, si["sigma"])}
 
-        # Determine active/inactive
-        max_mu = max(mu_star.values()) if mu_star else 1.0
-        cutoff = threshold * max_mu
-        active = [n for n in param_names if mu_star[n] >= cutoff]
-        inactive = [n for n in param_names if mu_star[n] < cutoff]
+        # Determine active/inactive by top-N ranking
+        k = min(top_n, len(param_names))
+        ranked = sorted(param_names, key=lambda n: mu_star[n], reverse=True)
+        active = ranked[:k]
+        inactive = ranked[k:]
 
         print(f"\n{'='*60}")
         print("MORRIS RESULTS")
         print(f"{'='*60}")
         print(f"{'Parameter':<30} {'mu*':>10} {'sigma':>10} {'Status':>10}")
         print("-" * 60)
-        for n in sorted(param_names, key=lambda k: mu_star[k], reverse=True):
+        for n in ranked:
             status = "ACTIVE" if n in active else "dropped"
             print(f"{n:<30} {mu_star[n]:10.4f} {sigma[n]:10.4f} {status:>10}")
-        print(f"\nThreshold: mu* > {cutoff:.4f} ({threshold*100:.0f}% of max)")
+        print(f"\nKept top {k} parameters by mu*")
         print(f"Active: {len(active)}, Dropped: {len(inactive)}")
         print(f"{'='*60}\n")
 
@@ -312,7 +311,7 @@ def run_morris_screening(
             sigma=sigma,
             active_params=active,
             inactive_params=inactive,
-            threshold=threshold,
+            top_n=top_n,
             num_evaluations=num_evals,
         )
     finally:
@@ -331,7 +330,7 @@ def run_sobol_analysis(
     weights: Dict[str, float] = None,
     region_weights: Dict[str, float] = None,
     n_samples: int = 128,
-    threshold: float = 0.01,
+    top_n: int = 7,
     n_vertices: int = 8,
     seed: int = 42,
     workers: int = 1,
@@ -348,7 +347,7 @@ def run_sobol_analysis(
         weights: Metric weights.
         region_weights: Background/foreground weights.
         n_samples: Base sample size N.  Total evals = N * (2k + 2).
-        threshold: Keep params with total-order ST > this value.
+        top_n: Keep the *top_n* parameters with highest total-order ST.
         n_vertices: Vertices per cell.
         seed: Random seed.
         workers: Number of parallel workers.  1 = sequential,
@@ -405,18 +404,20 @@ def run_sobol_analysis(
         s1 = {n: float(v) for n, v in zip(param_names, si["S1"])}
         st = {n: float(v) for n, v in zip(param_names, si["ST"])}
 
-        active = [n for n in param_names if st[n] > threshold]
-        inactive = [n for n in param_names if st[n] <= threshold]
+        k = min(top_n, len(param_names))
+        ranked = sorted(param_names, key=lambda n: st[n], reverse=True)
+        active = ranked[:k]
+        inactive = ranked[k:]
 
         print(f"\n{'='*60}")
         print("SOBOL RESULTS")
         print(f"{'='*60}")
         print(f"{'Parameter':<30} {'S1':>10} {'ST':>10} {'Status':>10}")
         print("-" * 60)
-        for n in sorted(param_names, key=lambda k_: st[k_], reverse=True):
+        for n in ranked:
             status = "ACTIVE" if n in active else "dropped"
             print(f"{n:<30} {s1[n]:10.4f} {st[n]:10.4f} {status:>10}")
-        print(f"\nThreshold: ST > {threshold}")
+        print(f"\nKept top {k} parameters by ST")
         print(f"Active: {len(active)}, Dropped: {len(inactive)}")
         print(f"{'='*60}\n")
 
@@ -426,7 +427,7 @@ def run_sobol_analysis(
             st=st,
             active_params=active,
             inactive_params=inactive,
-            threshold=threshold,
+            top_n=top_n,
             num_evaluations=num_evals,
         )
     finally:
@@ -443,10 +444,10 @@ def run_full_screening(
     weights: Dict[str, float] = None,
     region_weights: Dict[str, float] = None,
     num_trajectories: int = 10,
-    morris_threshold: float = 0.05,
+    morris_top_n: int = 10,
     run_sobol: bool = True,
     sobol_n_samples: int = 128,
-    sobol_threshold: float = 0.01,
+    sobol_top_n: int = 7,
     n_vertices: int = 8,
     seed: int = 42,
     workers: int = 1,
@@ -458,10 +459,10 @@ def run_full_screening(
         weights: Metric weights.
         region_weights: Background/foreground weights.
         num_trajectories: Morris trajectories.
-        morris_threshold: Morris importance threshold (fraction of max mu*).
+        morris_top_n: Keep the top N parameters after Morris screening.
         run_sobol: Whether to run Sobol after Morris.
         sobol_n_samples: Sobol base sample size.
-        sobol_threshold: Sobol total-order index threshold.
+        sobol_top_n: Keep the top N parameters after Sobol analysis.
         n_vertices: Vertices per cell.
         seed: Random seed.
         workers: Number of parallel workers.  1 = sequential,
@@ -479,7 +480,7 @@ def run_full_screening(
         weights=weights,
         region_weights=region_weights,
         num_trajectories=num_trajectories,
-        threshold=morris_threshold,
+        top_n=morris_top_n,
         n_vertices=n_vertices,
         seed=seed,
         workers=workers,
@@ -501,7 +502,7 @@ def run_full_screening(
             weights=weights,
             region_weights=region_weights,
             n_samples=sobol_n_samples,
-            threshold=sobol_threshold,
+            top_n=sobol_top_n,
             n_vertices=n_vertices,
             seed=seed,
             workers=workers,
@@ -559,7 +560,7 @@ def save_screening_results(result: ScreeningResult, path: Path) -> None:
             "sigma": result.morris.sigma,
             "active_params": result.morris.active_params,
             "inactive_params": result.morris.inactive_params,
-            "threshold": result.morris.threshold,
+            "top_n": result.morris.top_n,
             "num_evaluations": result.morris.num_evaluations,
         }
     if result.sobol is not None:
@@ -569,7 +570,7 @@ def save_screening_results(result: ScreeningResult, path: Path) -> None:
             "st": result.sobol.st,
             "active_params": result.sobol.active_params,
             "inactive_params": result.sobol.inactive_params,
-            "threshold": result.sobol.threshold,
+            "top_n": result.sobol.top_n,
             "num_evaluations": result.sobol.num_evaluations,
         }
 
@@ -594,7 +595,7 @@ def load_screening_results(path: Path) -> ScreeningResult:
             sigma=m["sigma"],
             active_params=m["active_params"],
             inactive_params=m["inactive_params"],
-            threshold=m["threshold"],
+            top_n=m["top_n"],
             num_evaluations=m["num_evaluations"],
         )
 
@@ -607,7 +608,7 @@ def load_screening_results(path: Path) -> ScreeningResult:
             st=s["st"],
             active_params=s["active_params"],
             inactive_params=s["inactive_params"],
-            threshold=s["threshold"],
+            top_n=s["top_n"],
             num_evaluations=s["num_evaluations"],
         )
 
