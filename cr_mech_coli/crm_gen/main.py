@@ -351,10 +351,10 @@ def _run_screen(args, config, config_path):
 
     # Screening parameters
     num_trajectories = screen_config.get("num_trajectories", 10)
-    morris_threshold = screen_config.get("morris_threshold", 0.05)
+    morris_top_n = screen_config.get("morris_top_n", 10)
     run_sobol = not args.skip_sobol and screen_config.get("run_sobol", True)
     sobol_n_samples = screen_config.get("sobol_n_samples", 128)
-    sobol_threshold = screen_config.get("sobol_threshold", 0.01)
+    sobol_top_n = screen_config.get("sobol_top_n", 7)
     num_images = args.num_images or screen_config.get("num_screening_images", 2)
     n_vertices = opt_config.get("n_vertices", 8)
     seed = opt_config.get("seed", 42)
@@ -371,10 +371,10 @@ def _run_screen(args, config, config_path):
         weights=weights,
         region_weights=region_weights,
         num_trajectories=num_trajectories,
-        morris_threshold=morris_threshold,
+        morris_top_n=morris_top_n,
         run_sobol=run_sobol,
         sobol_n_samples=sobol_n_samples,
-        sobol_threshold=sobol_threshold,
+        sobol_top_n=sobol_top_n,
         n_vertices=n_vertices,
         seed=seed,
         workers=workers,
@@ -455,10 +455,10 @@ def _run_fit(args, config, config_path):
             weights=weights,
             region_weights=region_weights,
             num_trajectories=screen_config.get("num_trajectories", 10),
-            morris_threshold=screen_config.get("morris_threshold", 0.05),
+            morris_top_n=screen_config.get("morris_top_n", 10),
             run_sobol=screen_config.get("run_sobol", True),
             sobol_n_samples=screen_config.get("sobol_n_samples", 128),
-            sobol_threshold=screen_config.get("sobol_threshold", 0.01),
+            sobol_top_n=screen_config.get("sobol_top_n", 7),
             n_vertices=n_vertices,
             seed=seed,
             workers=workers,
