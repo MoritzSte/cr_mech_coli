@@ -54,8 +54,8 @@ brightness_noise_strength = [0.0, 0.5  ]   # Intra-cell brightness variation
 
 [screening]
 num_trajectories = 10                   # Number of Morris trajectories
-morris_threshold = 0.05                 # Keep params with mu* > threshold * max(mu*)
+morris_top_n = 10                       # Keep top N params after Morris screening
 run_sobol = true                        # Run Sobol analysis after Morris
 sobol_n_samples = 128                   # Sobol base sample size (N)
-sobol_threshold = 0.01                  # Keep params with total-order ST > threshold
+sobol_top_n = 7                         # Keep top N params after Sobol analysis
 num_screening_images = 2                # Number of representative images for screening
