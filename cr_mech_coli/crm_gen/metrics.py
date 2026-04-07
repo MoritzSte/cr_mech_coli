@@ -37,7 +37,14 @@ def load_image(path: Path) -> np.ndarray:
         np.ndarray: Image as float array with values in [0,1].
     """
     img = tifffile.imread(path)
-    return img_as_float(img)
+    img = img_as_float(img)
+    if img.min() < 0.0 or img.max() > 1.0:
+        img_min, img_max = img.min(), img.max()
+        if img_max > img_min:
+            img = (img - img_min) / (img_max - img_min)
+        else:
+            img = np.zeros_like(img)
+    return img
 
 
 def compute_color_distribution(
