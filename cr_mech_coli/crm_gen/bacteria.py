@@ -45,6 +45,10 @@ def extract_original_brightness(
     elif original_image.dtype == np.float32 or original_image.dtype == np.float64:
         if gray_image.max() <= 1.0:
             gray_image = gray_image * 255.0  # Scale 0-1 float to 0-255
+        else:
+            # High-range float (e.g. brightfield): min-max normalize to 0-255
+            img_min, img_max = gray_image.min(), gray_image.max()
+            gray_image = (gray_image - img_min) / (img_max - img_min) * 255.0
 
     # Check if mask is grayscale (2D) or RGB (3D)
     is_grayscale_mask = len(original_mask.shape) == 2
