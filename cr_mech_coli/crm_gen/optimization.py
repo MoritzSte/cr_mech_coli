@@ -191,6 +191,15 @@ class DECheckpointManager:
                 print("Warning: Checkpoint popsize does not match current popsize")
                 return False
 
+        if "active_param_names" in saved_config and "active_param_names" in current_config:
+            if saved_config["active_param_names"] != current_config["active_param_names"]:
+                print(
+                    "Warning: Checkpoint active parameters do not match current parameters\n"
+                    f"  Checkpoint: {saved_config['active_param_names']}\n"
+                    f"  Current:    {current_config['active_param_names']}"
+                )
+                return False
+
         return True
 
 
@@ -620,16 +629,24 @@ def optimize_parameters(
                 config = {
                     "bounds": bounds,
                     "popsize": popsize,
+                    "active_param_names": active_param_names,
                 }
                 if checkpoint_mgr.validate_checkpoint(checkpoint, config):
                     init_population = checkpoint["population"]
                     start_iter = checkpoint["iteration"]
                     run_start_time = checkpoint["run_start_time"]
                     checkpoint_mgr.run_start_time = run_start_time
+                    # Restore active/fixed params from checkpoint
+                    saved_cfg = checkpoint["config"]
+                    if "active_param_names" in saved_cfg:
+                        active_param_names = saved_cfg["active_param_names"]
+                    if "fixed_params" in saved_cfg:
+                        fixed_params = saved_cfg["fixed_params"]
                     print(
                         f"\n*** RESUMING from checkpoint at iteration {start_iter} ***"
                     )
                     print(f"    Best loss so far: {checkpoint['best_fun']:.6f}")
+                    print(f"    Active parameters: {active_param_names}")
                     print(f"    Checkpoint: {checkpoint['checkpoint_path'].name}\n")
                 else:
                     print("Checkpoint validation failed, starting fresh")
@@ -671,6 +688,8 @@ def optimize_parameters(
                         "maxiter": maxiter,
                         "weights": weights,
                         "region_weights": region_weights,
+                        "active_param_names": active_param_names,
+                        "fixed_params": fixed_params,
                     },
                 )
 
