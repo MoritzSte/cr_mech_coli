@@ -536,6 +536,7 @@ def optimize_parameters(
     no_checkpoint: bool = False,
     active_param_names: List[str] = None,
     fixed_params: Dict = None,
+    checkpoint_dir: Path = None,
 ) -> Dict:
     """
     Optimize synthetic image parameters using differential evolution.
@@ -605,7 +606,8 @@ def optimize_parameters(
             fixed_params=fixed_params,
         )
 
-        checkpoint_dir = Path("./checkpoints")
+        if checkpoint_dir is None:
+            checkpoint_dir = Path("./checkpoints")
         checkpoint_mgr = None if no_checkpoint else DECheckpointManager(checkpoint_dir)
 
         init_population = "latinhypercube"

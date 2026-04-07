@@ -514,6 +514,7 @@ def _run_fit(args, config, config_path):
         no_checkpoint=no_checkpoint,
         active_param_names=active_param_names,
         fixed_params=fixed_params,
+        checkpoint_dir=output_dir,
     )
 
     # Compute final metrics
