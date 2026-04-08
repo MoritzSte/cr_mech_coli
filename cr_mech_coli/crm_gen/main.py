@@ -420,6 +420,7 @@ def _run_fit(args, config, config_path):
     workers = opt_config.get("workers", -1)
     seed = opt_config.get("seed", 42)
     resume = opt_config.get("resume", False)
+    resume_dir = opt_config.get("resume_dir", "")
     no_checkpoint = opt_config.get("no_checkpoint", False)
     save_all_synthetics = opt_config.get("save_all_synthetics", False)
 
@@ -478,12 +479,22 @@ def _run_fit(args, config, config_path):
         for name in active_param_names
     ]
 
-    # Create output directory with timestamp
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    if not output_dir_base:
-        output_dir = Path(f"./fit_results_{timestamp}")
+    # Create or reuse output directory
+    if resume and resume_dir:
+        output_dir = Path(resume_dir)
+        if not output_dir.exists():
+            print(f"Error: resume_dir does not exist: {output_dir}")
+            sys.exit(1)
+        print(f"Resuming from: {output_dir}")
     else:
-        output_dir = Path(output_dir_base) / f"fit_results_{timestamp}"
+        if resume and not resume_dir:
+            print("Error: resume=true but no resume_dir specified, cannot resume")
+            sys.exit(1)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        if not output_dir_base:
+            output_dir = Path(f"./fit_results_{timestamp}")
+        else:
+            output_dir = Path(output_dir_base) / f"fit_results_{timestamp}"
 
     output_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy(config_path, output_dir / "config.toml")
@@ -514,7 +525,7 @@ def _run_fit(args, config, config_path):
         no_checkpoint=no_checkpoint,
         active_param_names=active_param_names,
         fixed_params=fixed_params,
-        checkpoint_dir=output_dir,
+        checkpoint_dir=output_dir / "checkpoints",
     )
 
     # Compute final metrics
