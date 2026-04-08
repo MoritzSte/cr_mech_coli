@@ -365,6 +365,8 @@ def _run_screen(args, config, config_path):
     # Find image pairs (limited to num_images for screening)
     image_pairs = find_real_images(Path(args.input_dir), limit=num_images)
 
+    use_best_values = screen_config.get("use_best_values", False)
+
     # Run screening
     result = run_full_screening(
         image_pairs=image_pairs,
@@ -378,6 +380,7 @@ def _run_screen(args, config, config_path):
         n_vertices=n_vertices,
         seed=seed,
         workers=workers,
+        use_best_values=use_best_values,
     )
 
     # Save results
@@ -451,6 +454,7 @@ def _run_fit(args, config, config_path):
         num_screen_images = screen_config.get("num_screening_images", 2)
         screen_pairs = find_real_images(Path(input_dir), limit=num_screen_images)
 
+        use_best_values = screen_config.get("use_best_values", False)
         screening_result = run_full_screening(
             image_pairs=screen_pairs,
             weights=weights,
@@ -463,6 +467,7 @@ def _run_fit(args, config, config_path):
             n_vertices=n_vertices,
             seed=seed,
             workers=workers,
+            use_best_values=use_best_values,
         )
         active_param_names = screening_result.active_params
         fixed_params = screening_result.fixed_values
