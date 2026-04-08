@@ -12,6 +12,7 @@ popsize = 15                            # Population size multiplier (population
 workers = -1                            # Number of worker processes (-1 = all CPUs, 1 = sequential)
 seed = 42                               # Random seed for reproducibility
 resume = false                          # Resume from latest checkpoint
+resume_dir = ""                         # Directory of previous run to resume (required if resume = true)
 no_checkpoint = false                   # Disable checkpointing
 save_all_synthetics = false             # Generate synthetic images for all pairs after optimisation
 
