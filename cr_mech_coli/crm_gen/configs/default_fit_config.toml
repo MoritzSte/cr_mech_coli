@@ -60,3 +60,4 @@ run_sobol = true                        # Run Sobol analysis after Morris
 sobol_n_samples = 128                   # Sobol base sample size (N)
 sobol_top_n = 7                         # Keep top N params after Sobol analysis
 num_screening_images = 20               # Number of representative images for screening
+use_best_values = false                 # Fix inactive params to best values found during screening (false = registry defaults)
