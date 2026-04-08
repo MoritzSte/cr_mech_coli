@@ -14,13 +14,13 @@ seed = 42                               # Random seed for reproducibility
 resume = false                          # Resume from latest checkpoint
 resume_dir = ""                         # Directory of previous run to resume (required if resume = true)
 no_checkpoint = false                   # Disable checkpointing
-save_all_synthetics = false             # Generate synthetic images for all pairs after optimisation
+save_all_synthetics = true              # Generate synthetic images for all pairs after optimisation
 
 [optimization.metric_weights]
 histogram_distance = 0.01               # Weight for histogram L1 distance
 ssim = 1.0                              # Weight for SSIM (structural similarity)
 psnr = 0.02                             # Weight for PSNR (peak signal-to-noise ratio)
-ms_ssim = 0.0                           # Weight for Multi-Scale SSIM (0 = disabled)
+ms_ssim = 1.0                           # Weight for Multi-Scale SSIM (0 = disabled)
 power_spectrum = 0.0                    # Weight for power spectrum distance (0 = disabled)
 
 [optimization.region_weights]
@@ -59,4 +59,4 @@ morris_top_n = 10                       # Keep top N params after Morris screeni
 run_sobol = true                        # Run Sobol analysis after Morris
 sobol_n_samples = 128                   # Sobol base sample size (N)
 sobol_top_n = 7                         # Keep top N params after Sobol analysis
-num_screening_images = 2                # Number of representative images for screening
+num_screening_images = 20               # Number of representative images for screening
