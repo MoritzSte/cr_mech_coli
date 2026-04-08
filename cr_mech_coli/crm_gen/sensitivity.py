@@ -34,6 +34,7 @@ from .parameter_registry import (
     get_param_names,
     get_all_defaults,
     build_full_params,
+    cast_param,
 )
 
 
@@ -66,6 +67,7 @@ class MorrisResult:
     inactive_params: List[str]  # params eliminated
     top_n: int
     num_evaluations: int
+    best_params: Dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -79,6 +81,7 @@ class SobolResult:
     inactive_params: List[str]
     top_n: int
     num_evaluations: int
+    best_params: Dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -282,6 +285,9 @@ def run_morris_screening(
     try:
         Y = _evaluate_parallel(obj, X, num_evals, workers, desc="Morris evaluations")
 
+        best_idx = int(np.argmin(Y))
+        best_params = {n: cast_param(n, v) for n, v in zip(param_names, X[best_idx])}
+
         si = morris_analyze.analyze(problem, X, Y, seed=seed)
 
         mu_star = {n: float(v) for n, v in zip(param_names, si["mu_star"])}
@@ -313,6 +319,7 @@ def run_morris_screening(
             inactive_params=inactive,
             top_n=top_n,
             num_evaluations=num_evals,
+            best_params=best_params,
         )
     finally:
         obj.cleanup()
@@ -399,6 +406,9 @@ def run_sobol_analysis(
     try:
         Y = _evaluate_parallel(obj, X, num_evals, workers, desc="Sobol evaluations")
 
+        best_idx = int(np.argmin(Y))
+        best_params = {n: cast_param(n, v) for n, v in zip(param_names, X[best_idx])}
+
         si = _salib_call(sobol_analyze.analyze, problem, Y, seed=seed)
 
         s1 = {n: float(v) for n, v in zip(param_names, si["S1"])}
@@ -429,6 +439,7 @@ def run_sobol_analysis(
             inactive_params=inactive,
             top_n=top_n,
             num_evaluations=num_evals,
+            best_params=best_params,
         )
     finally:
         obj.cleanup()
@@ -451,6 +462,7 @@ def run_full_screening(
     n_vertices: int = 8,
     seed: int = 42,
     workers: int = 1,
+    use_best_values: bool = False,
 ) -> ScreeningResult:
     """Run the full Morris → Sobol screening pipeline.
 
@@ -488,9 +500,14 @@ def run_full_screening(
 
     active_after_morris = morris_result.active_params
     defaults = get_all_defaults()
-    fixed_after_morris = {
-        n: defaults[n] for n in morris_result.inactive_params
-    }
+    if use_best_values:
+        fixed_after_morris = {
+            n: morris_result.best_params[n] for n in morris_result.inactive_params
+        }
+    else:
+        fixed_after_morris = {
+            n: defaults[n] for n in morris_result.inactive_params
+        }
 
     sobol_result = None
     if run_sobol and len(active_after_morris) > 1:
@@ -512,8 +529,11 @@ def run_full_screening(
         final_inactive = list(
             set(all_names) - set(final_active)
         )
-        # Fixed = Morris-dropped defaults + Sobol-dropped defaults
-        fixed_values = {n: defaults[n] for n in final_inactive}
+        if use_best_values:
+            all_best = {**morris_result.best_params, **sobol_result.best_params}
+            fixed_values = {n: all_best[n] for n in final_inactive}
+        else:
+            fixed_values = {n: defaults[n] for n in final_inactive}
     else:
         final_active = active_after_morris
         final_inactive = morris_result.inactive_params
@@ -562,6 +582,7 @@ def save_screening_results(result: ScreeningResult, path: Path) -> None:
             "inactive_params": result.morris.inactive_params,
             "top_n": result.morris.top_n,
             "num_evaluations": result.morris.num_evaluations,
+            "best_params": result.morris.best_params,
         }
     if result.sobol is not None:
         data["sobol"] = {
@@ -572,6 +593,7 @@ def save_screening_results(result: ScreeningResult, path: Path) -> None:
             "inactive_params": result.sobol.inactive_params,
             "top_n": result.sobol.top_n,
             "num_evaluations": result.sobol.num_evaluations,
+            "best_params": result.sobol.best_params,
         }
 
     path = Path(path)
@@ -597,6 +619,7 @@ def load_screening_results(path: Path) -> ScreeningResult:
             inactive_params=m["inactive_params"],
             top_n=m["top_n"],
             num_evaluations=m["num_evaluations"],
+            best_params=m.get("best_params", {}),
         )
 
     sobol = None
@@ -610,6 +633,7 @@ def load_screening_results(path: Path) -> ScreeningResult:
             inactive_params=s["inactive_params"],
             top_n=s["top_n"],
             num_evaluations=s["num_evaluations"],
+            best_params=s.get("best_params", {}),
         )
 
     return ScreeningResult(
