@@ -48,6 +48,14 @@ psf_size                = [5,     21   ]   # PSF kernel size (odd integer)
 peak_signal             = [500,   10000]   # Peak photon count (Poisson noise)
 gaussian_sigma          = [0.001, 0.05 ]   # Gaussian readout noise sigma
 brightness_noise_strength = [0.0, 0.5  ]   # Intra-cell brightness variation
+# Brightfield / general optical parameters (inactive at default 0.0)
+absorption_coeff          = [0.0,   2.0  ]   # Beer-Lambert absorption coefficient
+cell_optical_thickness    = [0.5,   10.0 ]   # Maximum optical thickness at cell center
+defocus_strength          = [0.0,   3.0  ]   # Defocus blur strength (extra sigma)
+defocus_scale             = [1,     25   ]   # Spatial scale of z-variation field
+vignette_strength         = [0.0,   0.5  ]   # Radial intensity falloff strength
+edge_fringe_intensity     = [0.0,   0.1  ]   # Edge diffraction fringe intensity
+edge_fringe_width         = [0.5,   4.0  ]   # Edge diffraction fringe width (px)
 
 # =========================================================================
 # Screening configuration — used by `crm_gen screen` and `crm_gen fit --auto-screen`
