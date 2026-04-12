@@ -148,9 +148,23 @@ def apply_synthetic_effects(
         halo_blur_sigma = _p["halo_blur_sigma"]
         brightness_noise_strength = _p["brightness_noise_strength"]
         psf_size = int(_p["psf_size"])
+        absorption_coeff = _p["absorption_coeff"]
+        cell_optical_thickness = _p["cell_optical_thickness"]
+        defocus_strength = _p["defocus_strength"]
+        defocus_scale = int(_p["defocus_scale"])
+        vignette_strength = _p["vignette_strength"]
+        edge_fringe_intensity = _p["edge_fringe_intensity"]
+        edge_fringe_width = _p["edge_fringe_width"]
     else:
         dark_spot_intensity = 0.15  # legacy default
         psf_size = 7
+        absorption_coeff = 0.0
+        cell_optical_thickness = 3.0
+        defocus_strength = 0.0
+        defocus_scale = 10
+        vignette_strength = 0.0
+        edge_fringe_intensity = 0.0
+        edge_fringe_width = 1.5
 
     # Generate random seed if not provided
     if seed is None:
@@ -221,29 +235,75 @@ def apply_synthetic_effects(
     # Clip to valid range
     synthetic_image = np.clip(synthetic_image, 0, 255).astype(np.uint8)
 
-    # Apply halo effect filter
-    synthetic_image = filters.apply_halo_effect(
-        synthetic_image,
-        binary_mask,
-        halo_intensity=bac_halo_intensity,
-        inner_width=halo_inner_width,
-        outer_width=halo_outer_width,
-        blur_sigma=halo_blur_sigma,
-        fade_type=halo_fade_type,
-    )
+    # 4. Beer-Lambert absorption (brightfield: darkens cells)
+    if absorption_coeff > 0:
+        synthetic_image = filters.apply_beer_lambert_absorption(
+            synthetic_image,
+            binary_mask,
+            absorption_coeff=absorption_coeff,
+            cell_optical_thickness=cell_optical_thickness,
+        )
 
-    # Apply microscope effects (PSF, noise)
-    synthetic_image = filters.apply_microscope_effects(
-        synthetic_image,
-        apply_psf=apply_psf,
-        psf_sigma=psf_sigma,
-        psf_size=psf_size,
-        apply_poisson=apply_poisson,
-        peak_signal=peak_signal,
-        apply_gaussian=apply_gaussian,
-        gaussian_sigma=gaussian_sigma,
-        seed=seed,
-    )
+    # 5. Phase contrast halo (no-op when bac_halo_intensity <= 0)
+    if bac_halo_intensity > 0:
+        synthetic_image = filters.apply_halo_effect(
+            synthetic_image,
+            binary_mask,
+            halo_intensity=bac_halo_intensity,
+            inner_width=halo_inner_width,
+            outer_width=halo_outer_width,
+            blur_sigma=halo_blur_sigma,
+            fade_type=halo_fade_type,
+        )
+
+    # 6. Edge diffraction fringe (brightfield: thin boundary effect)
+    if edge_fringe_intensity > 0:
+        synthetic_image = filters.apply_edge_diffraction_fringe(
+            synthetic_image,
+            binary_mask,
+            edge_fringe_intensity=edge_fringe_intensity,
+            edge_fringe_width=edge_fringe_width,
+        )
+
+    # 7. Defocus blur (spatially varying depth-of-field)
+    if defocus_strength > 0:
+        synthetic_image = filters.apply_defocus_blur(
+            synthetic_image,
+            defocus_strength=defocus_strength,
+            defocus_scale=defocus_scale,
+            base_psf_sigma=psf_sigma,
+            seed=seed,
+        )
+
+    # 8. PSF blur (optical diffraction)
+    if apply_psf:
+        synthetic_image = filters.apply_psf_blur(
+            synthetic_image,
+            psf_sigma=psf_sigma,
+            psf_size=psf_size,
+        )
+
+    # 9. Vignetting (after optics, before sensor noise)
+    if vignette_strength > 0:
+        synthetic_image = filters.apply_vignetting(
+            synthetic_image,
+            vignette_strength=vignette_strength,
+        )
+
+    # 10. Sensor noise — Poisson (shot) then Gaussian (readout)
+    if apply_poisson:
+        synthetic_image = filters.add_poisson_noise(
+            synthetic_image,
+            peak_signal=peak_signal,
+            seed=seed,
+        )
+    if apply_gaussian:
+        gaussian_seed = (seed + 1) if seed is not None else None
+        synthetic_image = filters.add_gaussian_noise(
+            synthetic_image,
+            sigma=gaussian_sigma,
+            seed=gaussian_seed,
+        )
 
     return synthetic_image
 
