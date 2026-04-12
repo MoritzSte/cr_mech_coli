@@ -11,7 +11,7 @@ This module provides methods to simulate:
 """
 
 import numpy as np
-from scipy.ndimage import gaussian_filter, convolve
+from scipy.ndimage import gaussian_filter, convolve, distance_transform_edt, zoom
 from typing import Tuple, Optional
 
 
@@ -673,5 +673,316 @@ def apply_microscope_effects(
         # Use different seed if seed was provided
         gaussian_seed = (seed + 1) if seed is not None else None
         result = add_gaussian_noise(result, sigma=gaussian_sigma, seed=gaussian_seed)
+
+    return result
+
+
+# ============================================================================
+# Brightfield-style Filters
+# ============================================================================
+
+
+def apply_beer_lambert_absorption(
+    image: np.ndarray,
+    mask: np.ndarray,
+    absorption_coeff: float = 0.5,
+    cell_optical_thickness: float = 3.0,
+) -> np.ndarray:
+    """
+    Apply Beer-Lambert absorption inside cell regions.
+
+    Models the core brightfield contrast mechanism: cells appear darker than
+    the background because they absorb part of the transmitted light. The
+    optical thickness is derived from the distance-transform of the mask,
+    so cell centers absorb more than the edges.
+
+    Args:
+        image (np.ndarray): Input image (grayscale or RGB). Can be float [0,1]
+            or uint8 [0,255].
+        mask (np.ndarray): Binary mask where True/1 = cell (foreground).
+        absorption_coeff (float): Beer-Lambert absorption coefficient. 0.0 = no
+            absorption (no-op). Typical range: 0.2-1.5.
+        cell_optical_thickness (float): Maximum optical thickness at the cell
+            center, in the normalized distance-transform units (pixels).
+
+    Returns:
+        np.ndarray: Image with absorption applied inside mask region.
+    """
+    if absorption_coeff <= 0:
+        return image.copy()
+
+    input_dtype = image.dtype
+    is_uint8 = input_dtype == np.uint8
+
+    if is_uint8:
+        img_float = image.astype(np.float64) / 255.0
+    else:
+        img_float = image.astype(np.float64)
+
+    mask_bool = mask > 0 if mask.dtype != bool else mask
+
+    # Distance from edge inside the cell — proxy for optical thickness
+    distance_inside = distance_transform_edt(mask_bool)
+    max_dist = distance_inside.max()
+    if max_dist <= 0:
+        # No foreground pixels — nothing to absorb
+        return image.copy()
+
+    thickness_map = (distance_inside / max_dist) * cell_optical_thickness
+    transmission = np.exp(-absorption_coeff * thickness_map)
+
+    # Only apply where mask is True; background unchanged
+    if img_float.ndim == 2:
+        result = np.where(mask_bool, img_float * transmission, img_float)
+    else:
+        trans_3d = transmission[..., np.newaxis]
+        mask_3d = mask_bool[..., np.newaxis]
+        result = np.where(mask_3d, img_float * trans_3d, img_float)
+
+    result = np.clip(result, 0.0, 1.0)
+
+    if is_uint8:
+        result = (result * 255).astype(np.uint8)
+
+    return result
+
+
+def apply_defocus_blur(
+    image: np.ndarray,
+    defocus_strength: float = 1.0,
+    defocus_scale: int = 10,
+    base_psf_sigma: float = 0.5,
+    num_bins: int = 8,
+    seed: Optional[int] = None,
+) -> np.ndarray:
+    """
+    Apply spatially varying Gaussian blur to simulate depth-of-field defocus.
+
+    Generates a smooth z-offset field (Perlin-like multi-octave noise) and
+    blurs the image with a sigma that depends on the local z-offset. For
+    efficiency, the sigma range is discretized into a small number of bins,
+    each bin is blurred separately, and the pre-blurred images are blended
+    per-pixel based on bin membership.
+
+    Args:
+        image (np.ndarray): Input image (grayscale or RGB).
+        defocus_strength (float): Maximum additional sigma added on top of
+            *base_psf_sigma*. 0.0 = no-op. Typical range: 0.5-2.5.
+        defocus_scale (int): Spatial scale of the z-variation field. Larger =
+            smoother / lower-frequency variation.
+        base_psf_sigma (float): In-focus PSF sigma — minimum blur applied to
+            every pixel.
+        num_bins (int): Number of discrete sigma levels used for the
+            spatially-varying blur approximation.
+        seed (int): Random seed for the z-field.
+
+    Returns:
+        np.ndarray: Defocus-blurred image.
+    """
+    if defocus_strength <= 0:
+        return image.copy()
+
+    input_dtype = image.dtype
+    is_uint8 = input_dtype == np.uint8
+
+    if is_uint8:
+        img_float = image.astype(np.float64) / 255.0
+    else:
+        img_float = image.astype(np.float64)
+
+    h, w = img_float.shape[:2]
+    rng = np.random.default_rng(seed)
+
+    # Build a smooth [0, 1] z-field via low-resolution noise + upsample + smooth
+    low_h = max(h // max(defocus_scale, 1), 4)
+    low_w = max(w // max(defocus_scale, 1), 4)
+    low_noise = rng.standard_normal((low_h, low_w))
+    low_noise = gaussian_filter(low_noise, sigma=2.0)
+    z_field = zoom(low_noise, (h / low_h, w / low_w), order=3)
+    # Use absolute value so blur is symmetric around the focal plane
+    z_field = np.abs(z_field)
+    z_max = z_field.max()
+    if z_max > 0:
+        z_field = z_field / z_max
+
+    # Sigma per pixel
+    sigmas = base_psf_sigma + defocus_strength * z_field
+
+    # Discretize sigmas into num_bins values between min and max
+    s_min, s_max = sigmas.min(), sigmas.max()
+    if s_max - s_min < 1e-6:
+        # Uniform blur — just one gaussian_filter call
+        if img_float.ndim == 2:
+            result = gaussian_filter(img_float, sigma=float(s_min))
+        else:
+            result = np.stack(
+                [gaussian_filter(img_float[..., c], sigma=float(s_min))
+                 for c in range(img_float.shape[2])],
+                axis=-1,
+            )
+    else:
+        bin_sigmas = np.linspace(s_min, s_max, num_bins)
+
+        # Pre-blur image at each sigma level
+        blurred_stack = []
+        for bs in bin_sigmas:
+            if img_float.ndim == 2:
+                blurred_stack.append(gaussian_filter(img_float, sigma=float(bs)))
+            else:
+                blurred_stack.append(
+                    np.stack(
+                        [gaussian_filter(img_float[..., c], sigma=float(bs))
+                         for c in range(img_float.shape[2])],
+                        axis=-1,
+                    )
+                )
+
+        # For each pixel, linearly blend between the two nearest bins
+        # bin index (continuous) in [0, num_bins-1]
+        bin_idx = (sigmas - s_min) / (s_max - s_min) * (num_bins - 1)
+        lower = np.floor(bin_idx).astype(int)
+        upper = np.clip(lower + 1, 0, num_bins - 1)
+        frac = bin_idx - lower
+
+        if img_float.ndim == 2:
+            result = np.zeros_like(img_float)
+            for b in range(num_bins):
+                w_lower = (lower == b) * (1.0 - frac)
+                w_upper = (upper == b) * frac
+                # Also account for the case where lower == upper (at s_max)
+                if b == num_bins - 1:
+                    w_upper = w_upper + (lower == b) * (1.0 - frac) * (upper == lower)
+                result += (w_lower + w_upper) * blurred_stack[b]
+        else:
+            result = np.zeros_like(img_float)
+            for b in range(num_bins):
+                w_lower = (lower == b) * (1.0 - frac)
+                w_upper = (upper == b) * frac
+                if b == num_bins - 1:
+                    w_upper = w_upper + (lower == b) * (1.0 - frac) * (upper == lower)
+                weight = (w_lower + w_upper)[..., np.newaxis]
+                result += weight * blurred_stack[b]
+
+    result = np.clip(result, 0.0, 1.0)
+
+    if is_uint8:
+        result = (result * 255).astype(np.uint8)
+
+    return result
+
+
+def apply_vignetting(
+    image: np.ndarray,
+    vignette_strength: float = 0.2,
+) -> np.ndarray:
+    """
+    Apply radial intensity falloff (vignetting) from the image center.
+
+    Models uneven illumination often seen in brightfield microscopy due to
+    imperfect Köhler alignment or condenser misalignment.
+
+    Formula::
+
+        V(x, y) = 1 - strength * ((x - cx)^2 + (y - cy)^2) / r_max^2
+
+    Args:
+        image (np.ndarray): Input image (grayscale or RGB).
+        vignette_strength (float): Falloff strength. 0.0 = no vignetting.
+            At strength=0.5, corners are at 50% of center intensity.
+
+    Returns:
+        np.ndarray: Vignetted image.
+    """
+    if vignette_strength <= 0:
+        return image.copy()
+
+    input_dtype = image.dtype
+    is_uint8 = input_dtype == np.uint8
+
+    if is_uint8:
+        img_float = image.astype(np.float64) / 255.0
+    else:
+        img_float = image.astype(np.float64)
+
+    h, w = img_float.shape[:2]
+    cy, cx = (h - 1) / 2.0, (w - 1) / 2.0
+    y_grid, x_grid = np.ogrid[:h, :w]
+    r2 = (y_grid - cy) ** 2 + (x_grid - cx) ** 2
+    r_max2 = cx ** 2 + cy ** 2
+    vignette = 1.0 - vignette_strength * (r2 / r_max2)
+    vignette = np.clip(vignette, 0.0, 1.0)
+
+    if img_float.ndim == 2:
+        result = img_float * vignette
+    else:
+        result = img_float * vignette[..., np.newaxis]
+
+    result = np.clip(result, 0.0, 1.0)
+
+    if is_uint8:
+        result = (result * 255).astype(np.uint8)
+
+    return result
+
+
+def apply_edge_diffraction_fringe(
+    image: np.ndarray,
+    mask: np.ndarray,
+    edge_fringe_intensity: float = 0.03,
+    edge_fringe_width: float = 1.5,
+) -> np.ndarray:
+    """
+    Apply a thin bright/dark diffraction fringe at cell boundaries.
+
+    Models the subtle diffraction ripple sometimes visible at cell edges in
+    brightfield microscopy. Much thinner and weaker than the phase contrast
+    halo — the pattern is a dampened cosine in the distance-from-edge.
+
+    Args:
+        image (np.ndarray): Input image (grayscale or RGB).
+        mask (np.ndarray): Binary mask where True/1 = cell.
+        edge_fringe_intensity (float): Peak amplitude of the fringe.
+            0.0 = no-op. Typical range: 0.01-0.05.
+        edge_fringe_width (float): Width parameter of the fringe (pixels).
+
+    Returns:
+        np.ndarray: Image with fringe added.
+    """
+    if edge_fringe_intensity <= 0:
+        return image.copy()
+
+    input_dtype = image.dtype
+    is_uint8 = input_dtype == np.uint8
+
+    if is_uint8:
+        img_float = image.astype(np.float64) / 255.0
+    else:
+        img_float = image.astype(np.float64)
+
+    mask_bool = mask > 0 if mask.dtype != bool else mask
+
+    dist_outside = distance_transform_edt(~mask_bool)
+    dist_inside = distance_transform_edt(mask_bool)
+    # Signed distance: positive outside, negative inside (but dampening uses |d|)
+    dist = np.where(mask_bool, -dist_inside, dist_outside)
+
+    w = max(edge_fringe_width, 1e-6)
+    fringe = (
+        edge_fringe_intensity
+        * np.cos(2.0 * np.pi * dist / w)
+        * np.exp(-np.abs(dist) / (w * 2.0))
+    )
+    # Smooth slightly for physical realism
+    fringe = gaussian_filter(fringe, sigma=0.5)
+
+    if img_float.ndim == 2:
+        result = img_float + fringe
+    else:
+        result = img_float + fringe[..., np.newaxis]
+
+    result = np.clip(result, 0.0, 1.0)
+
+    if is_uint8:
+        result = (result * 255).astype(np.uint8)
 
     return result
