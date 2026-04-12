@@ -175,6 +175,66 @@ PARAMETER_REGISTRY: Dict[str, ParameterDef] = {
         category="brightness",
         description="Intra-cell brightness variation strength",
     ),
+    # ── Absorption (Beer-Lambert, brightfield) ────────────────────────────
+    "absorption_coeff": ParameterDef(
+        name="absorption_coeff",
+        bounds=(0.0, 2.0),
+        dtype="float",
+        default=0.0,
+        category="absorption",
+        description="Beer-Lambert absorption coefficient for cell bodies",
+    ),
+    "cell_optical_thickness": ParameterDef(
+        name="cell_optical_thickness",
+        bounds=(0.5, 10.0),
+        dtype="float",
+        default=3.0,
+        category="absorption",
+        description="Maximum optical thickness at cell center (pixels)",
+    ),
+    # ── Defocus (depth-of-field blur) ─────────────────────────────────────
+    "defocus_strength": ParameterDef(
+        name="defocus_strength",
+        bounds=(0.0, 3.0),
+        dtype="float",
+        default=0.0,
+        category="defocus",
+        description="Maximum additional blur sigma from defocus",
+    ),
+    "defocus_scale": ParameterDef(
+        name="defocus_scale",
+        bounds=(1, 25),
+        dtype="int",
+        default=10,
+        category="defocus",
+        description="Spatial scale of z-variation field for defocus",
+    ),
+    # ── Vignetting (radial illumination falloff) ──────────────────────────
+    "vignette_strength": ParameterDef(
+        name="vignette_strength",
+        bounds=(0.0, 0.5),
+        dtype="float",
+        default=0.0,
+        category="vignetting",
+        description="Radial intensity falloff strength from image center",
+    ),
+    # ── Edge diffraction fringe (brightfield) ─────────────────────────────
+    "edge_fringe_intensity": ParameterDef(
+        name="edge_fringe_intensity",
+        bounds=(0.0, 0.1),
+        dtype="float",
+        default=0.0,
+        category="edge_fringe",
+        description="Strength of edge diffraction fringe at cell boundaries",
+    ),
+    "edge_fringe_width": ParameterDef(
+        name="edge_fringe_width",
+        bounds=(0.5, 4.0),
+        dtype="float",
+        default=1.5,
+        category="edge_fringe",
+        description="Width of edge diffraction fringe in pixels",
+    ),
 }
 
 
