@@ -359,6 +359,12 @@ def _run_screen(args, config, config_path):
     n_vertices = opt_config.get("n_vertices", 8)
     seed = opt_config.get("seed", 42)
     workers = opt_config.get("workers", -1)
+    use_groups = screen_config.get("use_groups", True)
+    use_baseline_filter = screen_config.get("use_baseline_filter", True)
+    baseline_rate_threshold = screen_config.get(
+        "baseline_improvement_rate_threshold", 0.05
+    )
+    baseline_epsilon = screen_config.get("baseline_improvement_epsilon", 0.01)
 
     weights, region_weights = _extract_weights(opt_config)
 
@@ -381,6 +387,10 @@ def _run_screen(args, config, config_path):
         seed=seed,
         workers=workers,
         use_best_values=use_best_values,
+        use_groups=use_groups,
+        use_baseline_filter=use_baseline_filter,
+        baseline_improvement_rate_threshold=baseline_rate_threshold,
+        baseline_improvement_epsilon=baseline_epsilon,
     )
 
     # Save results
@@ -468,6 +478,14 @@ def _run_fit(args, config, config_path):
             seed=seed,
             workers=workers,
             use_best_values=use_best_values,
+            use_groups=screen_config.get("use_groups", True),
+            use_baseline_filter=screen_config.get("use_baseline_filter", True),
+            baseline_improvement_rate_threshold=screen_config.get(
+                "baseline_improvement_rate_threshold", 0.05
+            ),
+            baseline_improvement_epsilon=screen_config.get(
+                "baseline_improvement_epsilon", 0.01
+            ),
         )
         active_param_names = screening_result.active_params
         fixed_params = screening_result.fixed_values
