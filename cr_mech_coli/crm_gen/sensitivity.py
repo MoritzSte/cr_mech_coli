@@ -33,6 +33,9 @@ from .parameter_registry import (
     PARAMETER_REGISTRY,
     get_param_names,
     get_all_defaults,
+    get_groups_for,
+    get_off_values_for,
+    get_params_by_group,
     build_full_params,
     cast_param,
 )
@@ -58,16 +61,30 @@ def _salib_call(func, *args, seed=None, **kwargs):
 
 @dataclass
 class MorrisResult:
-    """Results from Morris elementary-effects screening."""
+    """Results from Morris elementary-effects screening.
+
+    When ``grouped=True``, ``mu_star`` / ``sigma`` are indexed by group name
+    and ``active_params`` is the union of parameters belonging to active
+    groups.  Per-parameter ranking is only available in non-grouped mode.
+    """
 
     param_names: List[str]
-    mu_star: Dict[str, float]  # mean absolute elementary effect
-    sigma: Dict[str, float]  # standard deviation of elementary effects
+    mu_star: Dict[str, float]  # keyed by param (ungrouped) or group (grouped)
+    sigma: Dict[str, float]
     active_params: List[str]  # params that passed the threshold
     inactive_params: List[str]  # params eliminated
     top_n: int
     num_evaluations: int
     best_params: Dict[str, float] = field(default_factory=dict)
+    grouped: bool = False
+    groups: List[str] = field(default_factory=list)  # per-param group assignment
+    active_groups: List[str] = field(default_factory=list)
+    inactive_groups: List[str] = field(default_factory=list)
+    # Baseline-improvement filter outputs (empty if filter disabled)
+    loss_off: Optional[float] = None
+    improvement_rate: Dict[str, float] = field(default_factory=dict)
+    best_improvement: Dict[str, float] = field(default_factory=dict)
+    auto_dropped: List[str] = field(default_factory=list)  # group or param names
 
 
 @dataclass
@@ -211,6 +228,58 @@ def _evaluate_parallel(
 # ---------------------------------------------------------------------------
 
 
+def _compute_baseline_statistics(
+    obj: "_ScreeningObjective",
+    X: np.ndarray,
+    Y: np.ndarray,
+    param_names: List[str],
+    fixed_params: Dict[str, float],
+) -> Tuple[Optional[float], Dict[str, float], Dict[str, float]]:
+    """Compute loss at the 'off baseline' and per-param improvement stats.
+
+    Returns:
+        loss_off: Loss evaluated with every param at its ``off_value``
+            (or ``default`` for params without one).  ``None`` if no params
+            in *param_names* declare an off_value.
+        improvement_rate: Fraction of samples where ``Y[j] < loss_off`` and
+            param was perturbed away from its off_value.
+        best_improvement: ``loss_off - min(Y[j])`` over samples where the
+            param was perturbed (clamped to >= 0).
+    """
+    off_values = get_off_values_for(param_names)
+    has_off = {n: v for n, v in off_values.items() if v is not None}
+    if not has_off:
+        return None, {}, {}
+
+    defaults = get_all_defaults()
+    x_off = np.array(
+        [has_off[n] if n in has_off else defaults[n] for n in param_names],
+        dtype=float,
+    )
+    loss_off = float(obj(x_off))
+
+    improvement_rate: Dict[str, float] = {}
+    best_improvement: Dict[str, float] = {}
+    for i, n in enumerate(param_names):
+        if n not in has_off:
+            continue
+        off_val = has_off[n]
+        # Samples where param n is meaningfully perturbed away from off
+        # Use a tolerance based on the parameter range to avoid float-equality issues
+        lo, hi = PARAMETER_REGISTRY[n].bounds
+        tol = 1e-6 * max(abs(hi - lo), 1.0)
+        perturbed_mask = np.abs(X[:, i] - off_val) > tol
+        if not perturbed_mask.any():
+            improvement_rate[n] = 0.0
+            best_improvement[n] = 0.0
+            continue
+        Y_pert = Y[perturbed_mask]
+        improvement_rate[n] = float(np.mean(Y_pert < loss_off))
+        best_improvement[n] = float(max(0.0, loss_off - Y_pert.min()))
+
+    return loss_off, improvement_rate, best_improvement
+
+
 def run_morris_screening(
     image_pairs: List[Tuple[Path, Path]],
     param_names: List[str] = None,
@@ -222,6 +291,10 @@ def run_morris_screening(
     n_vertices: int = 8,
     seed: int = 42,
     workers: int = 1,
+    use_groups: bool = True,
+    use_baseline_filter: bool = True,
+    baseline_improvement_rate_threshold: float = 0.05,
+    baseline_improvement_epsilon: float = 0.01,
 ) -> MorrisResult:
     """Run Morris elementary-effects screening.
 
@@ -232,14 +305,27 @@ def run_morris_screening(
         weights: Metric weights (histogram_distance, ssim, psnr).
         region_weights: Background/foreground weights.
         num_trajectories: Number of Morris trajectories (default 10).
-        top_n: Keep the *top_n* parameters with highest mu*.
+        top_n: Keep the *top_n* parameters (ungrouped) or groups (grouped)
+            with highest mu*.
         n_vertices: Vertices per cell for shape extraction.
         seed: Random seed.
         workers: Number of parallel workers.  1 = sequential,
             -1 = use all CPUs.
+        use_groups: Treat parameters sharing a ``group`` tag as a single
+            factor during screening (grouped Morris).  Reduces factor count
+            and captures coupling between params that implement the same
+            visual effect.
+        use_baseline_filter: Before the mu*-based ranking, auto-drop params
+            (or groups) whose perturbations never improve loss relative to
+            the "everything off" baseline.  Uses ``off_value`` from the
+            registry; params without an off_value are exempt.
+        baseline_improvement_rate_threshold: Minimum fraction of perturbed
+            samples that must improve over the off-baseline.
+        baseline_improvement_epsilon: Minimum relative improvement
+            ``(loss_off - min(Y)) / loss_off`` required to survive.
 
     Returns:
-        MorrisResult with ranked parameters and active/inactive sets.
+        MorrisResult with ranked parameters/groups and active/inactive sets.
     """
     from SALib.sample import morris as morris_sample
     from SALib.analyze import morris as morris_analyze
@@ -254,17 +340,27 @@ def run_morris_screening(
         region_weights = dict(DEFAULT_REGION_WEIGHTS)
 
     bounds = [PARAMETER_REGISTRY[n].bounds for n in param_names]
+    groups_per_param = get_groups_for(param_names)
 
     problem = {
         "num_vars": len(param_names),
         "names": param_names,
         "bounds": bounds,
     }
+    if use_groups:
+        problem["groups"] = groups_per_param
+        unique_groups = list(dict.fromkeys(groups_per_param))  # preserve order
+        num_factors = len(unique_groups)
+    else:
+        unique_groups = []
+        num_factors = len(param_names)
 
     print(f"\n{'='*60}")
-    print("MORRIS SCREENING")
+    print("MORRIS SCREENING" + (" (GROUPED)" if use_groups else ""))
     print(f"{'='*60}")
     print(f"Parameters: {len(param_names)}")
+    if use_groups:
+        print(f"Groups: {num_factors} ({', '.join(unique_groups)})")
     print(f"Trajectories: {num_trajectories}")
 
     X = morris_sample.sample(problem, N=num_trajectories, seed=seed)
@@ -290,39 +386,175 @@ def run_morris_screening(
 
         si = morris_analyze.analyze(problem, X, Y, seed=seed)
 
-        mu_star = {n: float(v) for n, v in zip(param_names, si["mu_star"])}
-        sigma = {n: float(v) for n, v in zip(param_names, si["sigma"])}
+        # In grouped mode SALib returns one entry per group; in ungrouped
+        # mode, one per parameter.  Key names come back in `si["names"]`.
+        factor_names = list(si.get("names", unique_groups if use_groups else param_names))
+        mu_star = {n: float(v) for n, v in zip(factor_names, si["mu_star"])}
+        sigma = {n: float(v) for n, v in zip(factor_names, si["sigma"])}
 
-        # Determine active/inactive by top-N ranking
-        k = min(top_n, len(param_names))
-        ranked = sorted(param_names, key=lambda n: mu_star[n], reverse=True)
-        active = ranked[:k]
-        inactive = ranked[k:]
+        # Baseline-improvement filter (reuses X and Y; +1 evaluation for loss_off)
+        loss_off: Optional[float] = None
+        improvement_rate: Dict[str, float] = {}
+        best_improvement: Dict[str, float] = {}
+        auto_dropped_factors: List[str] = []
+        if use_baseline_filter:
+            print("Computing baseline-improvement statistics...")
+            loss_off, improvement_rate, best_improvement = _compute_baseline_statistics(
+                obj, X, Y, param_names, fixed_params
+            )
+            if loss_off is not None:
+                auto_dropped_factors = _select_auto_dropped(
+                    param_names=param_names,
+                    groups_per_param=groups_per_param,
+                    factor_names=factor_names,
+                    use_groups=use_groups,
+                    improvement_rate=improvement_rate,
+                    best_improvement=best_improvement,
+                    loss_off=loss_off,
+                    rate_threshold=baseline_improvement_rate_threshold,
+                    epsilon=baseline_improvement_epsilon,
+                )
+                if auto_dropped_factors:
+                    print(
+                        f"  Auto-dropped by baseline filter: "
+                        f"{', '.join(auto_dropped_factors)}"
+                    )
+                else:
+                    print("  No factors auto-dropped.")
 
-        print(f"\n{'='*60}")
-        print("MORRIS RESULTS")
-        print(f"{'='*60}")
-        print(f"{'Parameter':<30} {'mu*':>10} {'sigma':>10} {'Status':>10}")
-        print("-" * 60)
-        for n in ranked:
-            status = "ACTIVE" if n in active else "dropped"
-            print(f"{n:<30} {mu_star[n]:10.4f} {sigma[n]:10.4f} {status:>10}")
-        print(f"\nKept top {k} parameters by mu*")
-        print(f"Active: {len(active)}, Dropped: {len(inactive)}")
-        print(f"{'='*60}\n")
+        # Rank surviving factors by mu* and keep top_n
+        survivors = [f for f in factor_names if f not in auto_dropped_factors]
+        k = min(top_n, len(survivors))
+        ranked_survivors = sorted(survivors, key=lambda n: mu_star[n], reverse=True)
+        active_factors = ranked_survivors[:k]
+        inactive_factors = ranked_survivors[k:] + auto_dropped_factors
+
+        # Expand factor-level decisions back to parameter-level
+        if use_groups:
+            active_params = [
+                n for n, g in zip(param_names, groups_per_param) if g in active_factors
+            ]
+            inactive_params = [
+                n for n, g in zip(param_names, groups_per_param) if g not in active_factors
+            ]
+            active_groups = active_factors
+            inactive_groups = inactive_factors
+        else:
+            active_params = active_factors
+            inactive_params = inactive_factors
+            active_groups = []
+            inactive_groups = []
+
+        # Pretty-print ranking
+        print(f"\n{'='*72}")
+        print("MORRIS RESULTS" + (" (per group)" if use_groups else " (per parameter)"))
+        print(f"{'='*72}")
+        header_label = "Group" if use_groups else "Parameter"
+        print(
+            f"{header_label:<24} {'mu*':>10} {'sigma':>10} "
+            f"{'improve%':>10} {'best_imp':>10} {'Status':>10}"
+        )
+        print("-" * 72)
+        all_ranked = sorted(factor_names, key=lambda n: mu_star[n], reverse=True)
+        for n in all_ranked:
+            if n in auto_dropped_factors:
+                status = "auto-drop"
+            elif n in active_factors:
+                status = "ACTIVE"
+            else:
+                status = "dropped"
+            # Baseline stats only exist per param; aggregate up to group if grouped
+            if use_groups:
+                members = [p for p, g in zip(param_names, groups_per_param) if g == n]
+                rate_vals = [improvement_rate[m] for m in members if m in improvement_rate]
+                imp_vals = [best_improvement[m] for m in members if m in best_improvement]
+                rate = max(rate_vals) if rate_vals else float("nan")
+                imp = max(imp_vals) if imp_vals else float("nan")
+            else:
+                rate = improvement_rate.get(n, float("nan"))
+                imp = best_improvement.get(n, float("nan"))
+            rate_str = f"{rate*100:9.1f}%" if not np.isnan(rate) else "       --"
+            imp_str = f"{imp:10.4f}" if not np.isnan(imp) else "        --"
+            print(
+                f"{n:<24} {mu_star[n]:10.4f} {sigma[n]:10.4f} "
+                f"{rate_str:>10} {imp_str:>10} {status:>10}"
+            )
+        if loss_off is not None:
+            print(f"\nBaseline loss (off-state): {loss_off:.6f}")
+        print(f"Kept top {k} {'groups' if use_groups else 'parameters'} by mu*")
+        print(
+            f"Active params: {len(active_params)}, "
+            f"Inactive params: {len(inactive_params)}"
+        )
+        print(f"{'='*72}\n")
 
         return MorrisResult(
             param_names=param_names,
             mu_star=mu_star,
             sigma=sigma,
-            active_params=active,
-            inactive_params=inactive,
+            active_params=active_params,
+            inactive_params=inactive_params,
             top_n=top_n,
             num_evaluations=num_evals,
             best_params=best_params,
+            grouped=use_groups,
+            groups=groups_per_param,
+            active_groups=active_groups,
+            inactive_groups=inactive_groups,
+            loss_off=loss_off,
+            improvement_rate=improvement_rate,
+            best_improvement=best_improvement,
+            auto_dropped=auto_dropped_factors,
         )
     finally:
         obj.cleanup()
+
+
+def _select_auto_dropped(
+    param_names: List[str],
+    groups_per_param: List[str],
+    factor_names: List[str],
+    use_groups: bool,
+    improvement_rate: Dict[str, float],
+    best_improvement: Dict[str, float],
+    loss_off: float,
+    rate_threshold: float,
+    epsilon: float,
+) -> List[str]:
+    """Identify factors (groups or params) that fail the baseline test.
+
+    A *group* is auto-droppable if at least one of its parameters has an
+    ``off_value`` — that parameter acts as the group's master switch (e.g.
+    ``bac_halo_intensity`` for the halo group).  When the master switch is
+    at its off_value the other group members are inert, so tracking the
+    master's improvement statistics is sufficient.  A group is dropped iff
+    the best observed improvement across all its switchable members is
+    below thresholds.
+
+    In ungrouped mode, only parameters with an explicit ``off_value`` are
+    eligible; all others are exempt.
+    """
+    dropped: List[str] = []
+    if use_groups:
+        for g in factor_names:
+            members = [p for p, pg in zip(param_names, groups_per_param) if pg == g]
+            switches = [m for m in members if m in improvement_rate]
+            if not switches:
+                continue  # no off_value anywhere in the group → exempt
+            max_rate = max(improvement_rate[m] for m in switches)
+            max_imp = max(best_improvement[m] for m in switches)
+            if max_rate < rate_threshold and max_imp < epsilon * loss_off:
+                dropped.append(g)
+    else:
+        for p in factor_names:
+            if p not in improvement_rate:
+                continue
+            if (
+                improvement_rate[p] < rate_threshold
+                and best_improvement[p] < epsilon * loss_off
+            ):
+                dropped.append(p)
+    return dropped
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +695,10 @@ def run_full_screening(
     seed: int = 42,
     workers: int = 1,
     use_best_values: bool = False,
+    use_groups: bool = True,
+    use_baseline_filter: bool = True,
+    baseline_improvement_rate_threshold: float = 0.05,
+    baseline_improvement_epsilon: float = 0.01,
 ) -> ScreeningResult:
     """Run the full Morris → Sobol screening pipeline.
 
@@ -471,7 +707,9 @@ def run_full_screening(
         weights: Metric weights.
         region_weights: Background/foreground weights.
         num_trajectories: Morris trajectories.
-        morris_top_n: Keep the top N parameters after Morris screening.
+        morris_top_n: Keep the top N groups (grouped mode) or parameters
+            (ungrouped) after Morris screening.  In grouped mode every
+            parameter belonging to a surviving group becomes active.
         run_sobol: Whether to run Sobol after Morris.
         sobol_n_samples: Sobol base sample size.
         sobol_top_n: Keep the top N parameters after Sobol analysis.
@@ -479,6 +717,10 @@ def run_full_screening(
         seed: Random seed.
         workers: Number of parallel workers.  1 = sequential,
             -1 = use all CPUs.
+        use_groups: Grouped Morris (see ``run_morris_screening``).
+        use_baseline_filter: Baseline-improvement auto-drop stage.
+        baseline_improvement_rate_threshold / baseline_improvement_epsilon:
+            Thresholds forwarded to the baseline filter.
 
     Returns:
         ScreeningResult with the final active/inactive parameter sets.
@@ -496,18 +738,39 @@ def run_full_screening(
         n_vertices=n_vertices,
         seed=seed,
         workers=workers,
+        use_groups=use_groups,
+        use_baseline_filter=use_baseline_filter,
+        baseline_improvement_rate_threshold=baseline_improvement_rate_threshold,
+        baseline_improvement_epsilon=baseline_improvement_epsilon,
     )
 
     active_after_morris = morris_result.active_params
     defaults = get_all_defaults()
-    if use_best_values:
-        fixed_after_morris = {
-            n: morris_result.best_params[n] for n in morris_result.inactive_params
+
+    # Identify params that were auto-dropped by the baseline filter so we can
+    # pin them to their off_value instead of their default.  In grouped mode
+    # `auto_dropped` holds group names; expand to the member params.
+    if morris_result.grouped:
+        auto_dropped_params = {
+            n for n, g in zip(all_names, morris_result.groups)
+            if g in morris_result.auto_dropped
         }
     else:
-        fixed_after_morris = {
-            n: defaults[n] for n in morris_result.inactive_params
-        }
+        auto_dropped_params = set(morris_result.auto_dropped)
+
+    def _fixed_value_for(name: str) -> Any:
+        """Pick the value used for a parameter held fixed after Morris."""
+        if name in auto_dropped_params:
+            off = PARAMETER_REGISTRY[name].off_value
+            if off is not None:
+                return off
+        if use_best_values:
+            return morris_result.best_params[name]
+        return defaults[name]
+
+    fixed_after_morris = {
+        n: _fixed_value_for(n) for n in morris_result.inactive_params
+    }
 
     sobol_result = None
     if run_sobol and len(active_after_morris) > 1:
@@ -529,11 +792,18 @@ def run_full_screening(
         final_inactive = list(
             set(all_names) - set(final_active)
         )
-        if use_best_values:
-            all_best = {**morris_result.best_params, **sobol_result.best_params}
-            fixed_values = {n: all_best[n] for n in final_inactive}
-        else:
-            fixed_values = {n: defaults[n] for n in final_inactive}
+        all_best = {**morris_result.best_params, **sobol_result.best_params}
+
+        def _final_fixed_value_for(name: str) -> Any:
+            if name in auto_dropped_params:
+                off = PARAMETER_REGISTRY[name].off_value
+                if off is not None:
+                    return off
+            if use_best_values:
+                return all_best[name]
+            return defaults[name]
+
+        fixed_values = {n: _final_fixed_value_for(n) for n in final_inactive}
     else:
         final_active = active_after_morris
         final_inactive = morris_result.inactive_params
@@ -583,6 +853,14 @@ def save_screening_results(result: ScreeningResult, path: Path) -> None:
             "top_n": result.morris.top_n,
             "num_evaluations": result.morris.num_evaluations,
             "best_params": result.morris.best_params,
+            "grouped": result.morris.grouped,
+            "groups": result.morris.groups,
+            "active_groups": result.morris.active_groups,
+            "inactive_groups": result.morris.inactive_groups,
+            "loss_off": result.morris.loss_off,
+            "improvement_rate": result.morris.improvement_rate,
+            "best_improvement": result.morris.best_improvement,
+            "auto_dropped": result.morris.auto_dropped,
         }
     if result.sobol is not None:
         data["sobol"] = {
@@ -620,6 +898,14 @@ def load_screening_results(path: Path) -> ScreeningResult:
             top_n=m["top_n"],
             num_evaluations=m["num_evaluations"],
             best_params=m.get("best_params", {}),
+            grouped=m.get("grouped", False),
+            groups=m.get("groups", []),
+            active_groups=m.get("active_groups", []),
+            inactive_groups=m.get("inactive_groups", []),
+            loss_off=m.get("loss_off"),
+            improvement_rate=m.get("improvement_rate", {}),
+            best_improvement=m.get("best_improvement", {}),
+            auto_dropped=m.get("auto_dropped", []),
         )
 
     sobol = None
