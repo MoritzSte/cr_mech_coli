@@ -2,11 +2,14 @@
 Central registry of all tunable parameters for synthetic microscope image generation.
 
 Every parameter that can be optimized or screened is defined here with its
-metadata (bounds, type, default, category).  This replaces the hardcoded
-parameter lists.
+metadata (group, bounds, default, off_value, dtype).  This replaces the
+hardcoded parameter lists.
 
 To add a new parameter (e.g. for a new imaging modality):
-    1.  Add a ``ParameterDef`` entry to ``PARAMETER_REGISTRY``.
+    1.  Add a ``ParameterDef`` entry to ``PARAMETER_REGISTRY``.  Specify a
+        ``group`` name — params sharing a group are perturbed together in
+        grouped Morris screening.  Set ``off_value`` to the value that
+        disables the effect (e.g. 0.0 for additive effects) if applicable.
     2.  Wire it into ``scene.py:apply_synthetic_effects()`` via the
         ``params`` dict pathway.
     3.  Re-run ``crm_gen screen`` — the screening will automatically
@@ -14,7 +17,7 @@ To add a new parameter (e.g. for a new imaging modality):
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -22,11 +25,12 @@ class ParameterDef:
     """Definition of a single tunable parameter."""
 
     name: str
-    bounds: Tuple[float, float]
-    dtype: str  # "float" or "int"
-    default: Any
-    category: str  # "background", "halo", "psf", "noise", "brightness"
+    group: str
     description: str
+    bounds: Tuple[float, float]
+    default: Any
+    off_value: Optional[float] = None
+    dtype: str = "float"  # "float", "int", or "int_odd"
 
 
 # ---------------------------------------------------------------------------
@@ -37,203 +41,196 @@ PARAMETER_REGISTRY: Dict[str, ParameterDef] = {
     # ── Background ────────────────────────────────────────────────────────
     "bg_base_brightness": ParameterDef(
         name="bg_base_brightness",
-        bounds=(0.0, 0.6),
-        dtype="float",
-        default=0.3,
-        category="background",
+        group="background",
         description="Base brightness level of the background",
+        bounds=(0.0, 0.6),
+        default=0.3,
     ),
     "bg_gradient_strength": ParameterDef(
         name="bg_gradient_strength",
+        group="background",
+        description="Illumination gradient intensity",
         bounds=(0.0, 0.04),
-        dtype="float",
         default=0.001,
-        category="background",
-        description="Illumination gradie1nt intensity",
+        off_value=0.0,
     ),
     "bg_noise_scale": ParameterDef(
         name="bg_noise_scale",
-        bounds=(1, 25),
-        dtype="int",
-        default=5,
-        category="background",
+        group="background",
         description="Perlin-like background noise scale factor",
-    ),
-    "texture_strength": ParameterDef(
-        name="texture_strength",
-        bounds=(0.0, 0.1),
-        dtype="float",
-        default=0.02,
-        category="background",
-        description="Fine texture strength for background surface variations",
-    ),
-    "texture_scale": ParameterDef(
-        name="texture_scale",
-        bounds=(0.5, 5.0),
-        dtype="float",
-        default=1.5,
-        category="background",
-        description="Texture smoothness (higher = smoother)",
+        bounds=(1, 25),
+        default=5,
+        dtype="int",
     ),
     "bg_blur_sigma": ParameterDef(
         name="bg_blur_sigma",
-        bounds=(0.1, 3.0),
-        dtype="float",
-        default=0.8,
-        category="background",
+        group="background",
         description="Gaussian blur sigma for background optical effects",
+        bounds=(0.1, 3.0),
+        default=0.8,
     ),
+    # ── Texture ───────────────────────────────────────────────────────────
+    "texture_strength": ParameterDef(
+        name="texture_strength",
+        group="texture",
+        description="Fine texture strength for background surface variations",
+        bounds=(0.0, 0.1),
+        default=0.02,
+        off_value=0.0,
+    ),
+    "texture_scale": ParameterDef(
+        name="texture_scale",
+        group="texture",
+        description="Texture smoothness (higher = smoother)",
+        bounds=(0.5, 5.0),
+        default=1.5,
+    ),
+    # ── Debris (dark spots) ───────────────────────────────────────────────
     "dark_spot_intensity": ParameterDef(
         name="dark_spot_intensity",
-        bounds=(0.0, 0.3),
-        dtype="float",
-        default=0.15,
-        category="background",
+        group="debris",
         description="Intensity (darkness) of debris spots",
+        bounds=(0.0, 0.3),
+        default=0.15,
+        off_value=0.0,
     ),
     "num_dark_spots_max": ParameterDef(
         name="num_dark_spots_max",
-        bounds=(0, 10),
-        dtype="int",
-        default=0,
-        category="background",
+        group="debris",
         description="Maximum number of dark spots in background",
+        bounds=(0, 10),
+        default=0,
+        off_value=0,
+        dtype="int",
     ),
     # ── Halo ──────────────────────────────────────────────────────────────
     "bac_halo_intensity": ParameterDef(
         name="bac_halo_intensity",
-        bounds=(0.0, 0.6),
-        dtype="float",
-        default=0.00,
-        category="halo",
+        group="halo",
         description="Halo effect intensity around bacteria edges",
+        bounds=(0.0, 0.6),
+        default=0.0,
+        off_value=0.0,
     ),
     "halo_inner_width": ParameterDef(
         name="halo_inner_width",
-        bounds=(0.5, 5.0),
-        dtype="float",
-        default=2.0,
-        category="halo",
+        group="halo",
         description="Width of inner bright halo in pixels",
+        bounds=(0.5, 5.0),
+        default=2.0,
     ),
     "halo_outer_width": ParameterDef(
         name="halo_outer_width",
-        bounds=(5.0, 100.0),
-        dtype="float",
-        default=50.0,
-        category="halo",
+        group="halo",
         description="Total halo extent in pixels",
+        bounds=(5.0, 100.0),
+        default=50.0,
     ),
     "halo_blur_sigma": ParameterDef(
         name="halo_blur_sigma",
-        bounds=(0.1, 3.0),
-        dtype="float",
-        default=0.5,
-        category="halo",
+        group="halo",
         description="Gaussian blur sigma for halo transition smoothing",
+        bounds=(0.1, 3.0),
+        default=0.5,
     ),
     # ── PSF ───────────────────────────────────────────────────────────────
     "psf_sigma": ParameterDef(
         name="psf_sigma",
-        bounds=(0.1, 3.0),
-        dtype="float",
-        default=1.0,
-        category="psf",
+        group="psf",
         description="Point Spread Function blur standard deviation (pixels)",
+        bounds=(0.1, 3.0),
+        default=1.0,
     ),
     "psf_size": ParameterDef(
         name="psf_size",
-        bounds=(5, 21),
-        dtype="int_odd",
-        default=7,
-        category="psf",
+        group="psf",
         description="PSF kernel size (odd integer)",
+        bounds=(5, 21),
+        default=7,
+        dtype="int_odd",
     ),
-    # ── Noise ─────────────────────────────────────────────────────────────
+    # ── Poisson noise ─────────────────────────────────────────────────────
     "peak_signal": ParameterDef(
         name="peak_signal",
-        bounds=(500, 10000),
-        dtype="float",
-        default=8000.0,
-        category="noise",
+        group="poisson_noise",
         description="Peak photon count for Poisson noise (higher = less noise)",
+        bounds=(500, 10000),
+        default=8000.0,
     ),
+    # ── Gaussian readout noise ────────────────────────────────────────────
     "gaussian_sigma": ParameterDef(
         name="gaussian_sigma",
-        bounds=(0.001, 0.05),
-        dtype="float",
-        default=0.01,
-        category="noise",
+        group="gaussian_noise",
         description="Gaussian readout noise standard deviation",
+        bounds=(0.001, 0.05),
+        default=0.01,
     ),
-    # ── Brightness ────────────────────────────────────────────────────────
+    # ── Brightness variation ──────────────────────────────────────────────
     "brightness_noise_strength": ParameterDef(
         name="brightness_noise_strength",
-        bounds=(0.0, 0.5),
-        dtype="float",
-        default=0.1,
-        category="brightness",
+        group="brightness_variation",
         description="Intra-cell brightness variation strength",
+        bounds=(0.0, 0.5),
+        default=0.1,
+        off_value=0.0,
     ),
     # ── Absorption (Beer-Lambert, brightfield) ────────────────────────────
     "absorption_coeff": ParameterDef(
         name="absorption_coeff",
-        bounds=(0.0, 2.0),
-        dtype="float",
-        default=0.0,
-        category="absorption",
+        group="absorption",
         description="Beer-Lambert absorption coefficient for cell bodies",
+        bounds=(0.0, 2.0),
+        default=0.0,
+        off_value=0.0,
     ),
     "cell_optical_thickness": ParameterDef(
         name="cell_optical_thickness",
-        bounds=(0.5, 10.0),
-        dtype="float",
-        default=3.0,
-        category="absorption",
+        group="absorption",
         description="Maximum optical thickness at cell center (pixels)",
+        bounds=(0.5, 10.0),
+        default=3.0,
     ),
     # ── Defocus (depth-of-field blur) ─────────────────────────────────────
     "defocus_strength": ParameterDef(
         name="defocus_strength",
-        bounds=(0.0, 3.0),
-        dtype="float",
-        default=0.0,
-        category="defocus",
+        group="defocus",
         description="Maximum additional blur sigma from defocus",
+        bounds=(0.0, 3.0),
+        default=0.0,
+        off_value=0.0,
     ),
     "defocus_scale": ParameterDef(
         name="defocus_scale",
-        bounds=(1, 25),
-        dtype="int",
-        default=10,
-        category="defocus",
+        group="defocus",
         description="Spatial scale of z-variation field for defocus",
+        bounds=(1, 25),
+        default=10,
+        dtype="int",
     ),
     # ── Vignetting (radial illumination falloff) ──────────────────────────
     "vignette_strength": ParameterDef(
         name="vignette_strength",
-        bounds=(0.0, 0.5),
-        dtype="float",
-        default=0.0,
-        category="vignetting",
+        group="vignette",
         description="Radial intensity falloff strength from image center",
+        bounds=(0.0, 0.5),
+        default=0.0,
+        off_value=0.0,
     ),
     # ── Edge diffraction fringe (brightfield) ─────────────────────────────
     "edge_fringe_intensity": ParameterDef(
         name="edge_fringe_intensity",
-        bounds=(0.0, 0.1),
-        dtype="float",
-        default=0.0,
-        category="edge_fringe",
+        group="edge_fringe",
         description="Strength of edge diffraction fringe at cell boundaries",
+        bounds=(0.0, 0.1),
+        default=0.0,
+        off_value=0.0,
     ),
     "edge_fringe_width": ParameterDef(
         name="edge_fringe_width",
-        bounds=(0.5, 4.0),
-        dtype="float",
-        default=1.5,
-        category="edge_fringe",
+        group="edge_fringe",
         description="Width of edge diffraction fringe in pixels",
+        bounds=(0.5, 4.0),
+        default=1.5,
     ),
 }
 
@@ -266,6 +263,28 @@ def get_bounds_for(names: List[str]) -> List[Tuple[float, float]]:
 def get_defaults_for(names: List[str]) -> Dict[str, Any]:
     """Return defaults for a specific subset of parameters."""
     return {n: PARAMETER_REGISTRY[n].default for n in names}
+
+
+def get_groups_for(names: List[str]) -> List[str]:
+    """Return the group name for each parameter (order-preserving)."""
+    return [PARAMETER_REGISTRY[n].group for n in names]
+
+
+def get_off_values_for(names: List[str]) -> Dict[str, Optional[float]]:
+    """Return ``{name: off_value}`` for the given parameters.
+
+    ``off_value`` is ``None`` for parameters whose effect cannot be meaningfully
+    disabled (e.g. base brightness, PSF sigma — the image still has those).
+    """
+    return {n: PARAMETER_REGISTRY[n].off_value for n in names}
+
+
+def get_params_by_group() -> Dict[str, List[str]]:
+    """Return ``{group_name: [param_names]}`` for every group in the registry."""
+    groups: Dict[str, List[str]] = {}
+    for name, pdef in PARAMETER_REGISTRY.items():
+        groups.setdefault(pdef.group, []).append(name)
+    return groups
 
 
 def cast_param(name: str, value: float) -> Any:
