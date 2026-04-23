@@ -212,11 +212,22 @@ def _evaluate_parallel(
     import multiprocessing
     from concurrent.futures import ProcessPoolExecutor
 
-    n_workers = multiprocessing.cpu_count() if workers == -1 else workers
+    # Respect SLURM / cgroups allocation when available (cpu_count returns the
+    # full node size, which oversubscribes on shared clusters).
+    available = (
+        len(os.sched_getaffinity(0))
+        if hasattr(os, "sched_getaffinity")
+        else multiprocessing.cpu_count()
+    )
+    n_workers = available if workers == -1 else workers
     # Build a plain list so each row is pickled independently
     rows = [X[i] for i in range(num_evals)]
 
-    with ProcessPoolExecutor(max_workers=n_workers) as pool:
+    # Use "spawn" to avoid fork-related heap corruption in native extensions
+    # (the Rust cr_mech_coli core + BLAS threads are not fork-safe).
+    ctx = multiprocessing.get_context("spawn")
+
+    with ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx) as pool:
         Y = np.array(
             list(tqdm(pool.map(obj, rows, chunksize=4), total=num_evals, desc=desc))
         )
