@@ -10,7 +10,7 @@ n_vertices = 8                          # Number of vertices per cell for shape 
 maxiter = 50                            # Maximum differential evolution iterations
 popsize = 15                            # Population size multiplier (population = popsize * num_params)
 workers = -1                            # Number of worker processes (-1 = all CPUs, 1 = sequential)
-seed = 42                               # Random seed for reproducibility
+seed = 0                                # Random seed for reproducibility
 resume = false                          # Resume from latest checkpoint
 resume_dir = ""                         # Directory of previous run to resume (required if resume = true)
 no_checkpoint = false                   # Disable checkpointing
@@ -24,48 +24,66 @@ ms_ssim = 1.0                           # Weight for Multi-Scale SSIM (0 = disab
 power_spectrum = 0.0                    # Weight for power spectrum distance (0 = disabled)
 
 [optimization.region_weights]
-background = 0.65                       # Weight for background region loss
-foreground = 0.35                       # Weight for foreground region loss
+background = 0.5                        # Weight for background region loss
+foreground = 0.5                        # Weight for foreground region loss
 
 [optimization.bounds]
-# Search bounds [min, max] for each imaging parameter during optimisation.
+# Search bounds [min, max] for each imaging parameter during optimization.
 # These define the space explored by differential evolution.
 # Parameters not listed here fall back to registry defaults.
-bg_base_brightness      = [0.0,   0.6  ]   # Background base brightness
-bg_gradient_strength    = [0.0,   0.04 ]   # Illumination gradient intensity
-bg_noise_scale          = [1,     25   ]   # Background illumination noise scale
-texture_strength        = [0.0,   0.1  ]   # Fine texture strength
-texture_scale           = [0.5,   5.0  ]   # Texture smoothness
-bg_blur_sigma           = [0.1,   3.0  ]   # Background blur sigma
-dark_spot_intensity     = [0.0,   0.3  ]   # Dark spot intensity
-num_dark_spots_max      = [0,     20   ]   # Maximum dark spots
-bac_halo_intensity      = [0.0,   0.6  ]   # Halo intensity around bacteria
-halo_inner_width        = [0.5,   5.0  ]   # Inner halo width (pixels)
-halo_outer_width        = [5.0,   100.0]   # Outer halo width (pixels)
-halo_blur_sigma         = [0.1,   3.0  ]   # Halo blur sigma
-psf_sigma               = [0.1,   3.0  ]   # Point Spread Function blur sigma
-psf_size                = [5,     21   ]   # PSF kernel size (odd integer)
-peak_signal             = [500,   10000]   # Peak photon count (Poisson noise)
-gaussian_sigma          = [0.001, 0.05 ]   # Gaussian readout noise sigma
-brightness_noise_strength = [0.0, 0.5  ]   # Intra-cell brightness variation
-# Brightfield / general optical parameters (inactive at default 0.0)
-absorption_coeff          = [0.0,   2.0  ]   # Beer-Lambert absorption coefficient
-cell_optical_thickness    = [0.5,   10.0 ]   # Maximum optical thickness at cell center
-defocus_strength          = [0.0,   3.0  ]   # Defocus blur strength (extra sigma)
-defocus_scale             = [1,     25   ]   # Spatial scale of z-variation field
-vignette_strength         = [0.0,   0.5  ]   # Radial intensity falloff strength
-edge_fringe_intensity     = [0.0,   0.1  ]   # Edge diffraction fringe intensity
-edge_fringe_width         = [0.5,   4.0  ]   # Edge diffraction fringe width (px)
+
+# bg_base_brightness      = [0.0,   0.6  ]   # Background base brightness
+# bg_gradient_strength    = [0.0,   0.04 ]   # Illumination gradient intensity
+# bg_noise_scale          = [1,     25   ]   # Background illumination noise scale
+# texture_strength        = [0.0,   0.1  ]   # Fine texture strength
+# texture_scale           = [0.5,   5.0  ]   # Texture smoothness
+# bg_blur_sigma           = [0.1,   3.0  ]   # Background blur sigma
+# dark_spot_intensity     = [0.0,   0.3  ]   # Dark spot intensity
+# num_dark_spots_max      = [0,     20   ]   # Maximum dark spots
+# bac_halo_intensity      = [0.0,   0.6  ]   # Halo intensity around bacteria
+# halo_inner_width        = [0.5,   5.0  ]   # Inner halo width (pixels)
+# halo_outer_width        = [5.0,   100.0]   # Outer halo width (pixels)
+# halo_blur_sigma         = [0.1,   3.0  ]   # Halo blur sigma
+# psf_sigma               = [0.1,   3.0  ]   # Point Spread Function blur sigma
+# psf_size                = [5,     21   ]   # PSF kernel size (odd integer)
+# peak_signal             = [500,   10000]   # Peak photon count (Poisson noise)
+# gaussian_sigma          = [0.001, 0.05 ]   # Gaussian readout noise sigma
+# brightness_noise_strength = [0.0, 0.5  ]   # Intra-cell brightness variation
+# absorption_coeff          = [0.0,   2.0  ]   # Beer-Lambert absorption coefficient
+# cell_optical_thickness    = [0.5,   10.0 ]   # Maximum optical thickness at cell center
+# defocus_strength          = [0.0,   3.0  ]   # Defocus blur strength (extra sigma)
+# defocus_scale             = [1,     25   ]   # Spatial scale of z-variation field
+# vignette_strength         = [0.0,   0.5  ]   # Radial intensity falloff strength
+# edge_fringe_intensity     = [0.0,   0.1  ]   # Edge diffraction fringe intensity
+# edge_fringe_width         = [0.5,   4.0  ]   # Edge diffraction fringe width (px)
 
 # =========================================================================
 # Screening configuration — used by `crm_gen screen` and `crm_gen fit --auto-screen`
 # =========================================================================
 
 [screening]
-num_trajectories = 10                   # Number of Morris trajectories
-morris_top_n = 10                       # Keep top N params after Morris screening
+num_trajectories = 30                   # Number of Morris trajectories
+morris_top_n = 10                       # Keep top N groups (grouped mode) or params (ungrouped) after Morris
 run_sobol = true                        # Run Sobol analysis after Morris
 sobol_n_samples = 128                   # Sobol base sample size (N)
 sobol_top_n = 7                         # Keep top N params after Sobol analysis
 num_screening_images = 20               # Number of representative images for screening
 use_best_values = false                 # Fix inactive params to best values found during screening (false = registry defaults)
+
+# --- Grouped Morris ---
+# Treat params sharing a `group` tag (see parameter_registry.py) as a single
+# factor during Morris.  Captures coupling between params that implement the
+# same visual effect (e.g. halo_inner_width + halo_outer_width move together)
+# and reduces the factor count for more stable mu* estimates.
+use_groups = true
+
+# --- Baseline-improvement filter ---
+# Auto-drop groups/params whose perturbations never improve over the
+# "everything off" baseline loss.  Uses the `off_value` declared per param
+# in the registry; params without an off_value are exempt.  This makes the
+# screening microscope-mode-agnostic: on brightfield images, halo gets
+# dropped automatically; on fluorescence, bf-specific effects like absorption
+# or edge_fringe get dropped instead.
+use_baseline_filter = true
+baseline_improvement_rate_threshold = 0.05   # Min fraction of perturbed samples that must improve over off-baseline
+baseline_improvement_epsilon = 0.01          # Min relative improvement (loss_off - min_Y) / loss_off to survive
