@@ -245,6 +245,7 @@ def _compute_baseline_statistics(
     Y: np.ndarray,
     param_names: List[str],
     fixed_params: Dict[str, float],
+    workers: int = 1,
 ) -> Tuple[Optional[float], Dict[str, float], Dict[str, float]]:
     """Compute loss at the 'off baseline' and per-param improvement stats.
 
@@ -267,7 +268,13 @@ def _compute_baseline_statistics(
         [has_off[n] if n in has_off else defaults[n] for n in param_names],
         dtype=float,
     )
-    loss_off = float(obj(x_off))
+    # Route the single baseline eval through the same spawn pool used for the
+    # sampling grid.  Running it in-process here would initialize VTK/OpenGL
+    # in the parent, and any later fork-based pool (e.g. scipy's DE) would
+    # inherit that broken GL state and flood stdout with framebuffer dumps.
+    loss_off = float(
+        _evaluate_parallel(obj, x_off[np.newaxis, :], 1, workers, desc="Baseline")[0]
+    )
 
     improvement_rate: Dict[str, float] = {}
     best_improvement: Dict[str, float] = {}
@@ -411,7 +418,7 @@ def run_morris_screening(
         if use_baseline_filter:
             print("Computing baseline-improvement statistics...")
             loss_off, improvement_rate, best_improvement = _compute_baseline_statistics(
-                obj, X, Y, param_names, fixed_params
+                obj, X, Y, param_names, fixed_params, workers=workers
             )
             if loss_off is not None:
                 auto_dropped_factors = _select_auto_dropped(
