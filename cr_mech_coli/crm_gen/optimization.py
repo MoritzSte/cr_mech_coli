@@ -707,13 +707,26 @@ def optimize_parameters(
         print("This may take a while depending on the number of images and iterations.")
         print("Progress updates will appear below:\n")
 
-        result = differential_evolution(
-            objective_fn,
+        # Resolve worker count against the SLURM/cgroups affinity rather than
+        # the full host CPU count, matching the screening pool.
+        import multiprocessing as _mp
+        from concurrent.futures import ProcessPoolExecutor as _PPE
+
+        if workers == 1:
+            n_workers = 1
+        else:
+            available = (
+                len(os.sched_getaffinity(0))
+                if hasattr(os, "sched_getaffinity")
+                else _mp.cpu_count()
+            )
+            n_workers = available if workers == -1 else workers
+
+        de_kwargs = dict(
             bounds=bounds,
             maxiter=remaining_iters,
             popsize=popsize,
-            workers=workers,
-            updating="deferred" if workers != 1 else "immediate",
+            updating="deferred" if n_workers != 1 else "immediate",
             polish=False,
             init=init_population,
             strategy="best1bin",
@@ -722,6 +735,20 @@ def optimize_parameters(
             callback=callback,
             mutation=(0.5, 1.3),
         )
+
+        if n_workers == 1:
+            result = differential_evolution(objective_fn, workers=1, **de_kwargs)
+        else:
+            # Use a spawn pool so workers start with a clean interpreter.
+            # scipy's default (fork) would inherit any OpenGL/VTK state that
+            # lives in the parent — unsafe across fork and the source of the
+            # framebuffer-dump spam on SLURM.  Spawn also keeps the Rust core
+            # and BLAS threads happy, same reasoning as the screening pool.
+            ctx = _mp.get_context("spawn")
+            with _PPE(max_workers=n_workers, mp_context=ctx) as pool:
+                result = differential_evolution(
+                    objective_fn, workers=pool.map, **de_kwargs
+                )
 
         end_time = time.time()
         elapsed_time = end_time - start_time
