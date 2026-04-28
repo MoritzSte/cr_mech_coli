@@ -18,9 +18,35 @@ import tifffile as tiff
 from tqdm import tqdm
 
 from .scene import create_synthetic_scene
-from .optimization import extract_masked_region
-from .metrics import load_image, compute_all_metrics
+from .metrics import (
+    load_image,
+    compute_all_metrics,
+    compute_color_distribution,
+    compute_psnr,
+    compute_ssim,
+)
 from .parameter_registry import PARAMETER_REGISTRY
+
+
+def _extract_masked_region(image, mask, region):
+    """Zero out pixels outside ``region`` for histogram-style display only.
+
+    The fake-cliff problem that motivated removing this helper from the
+    DE inner loop does NOT apply to plotting — the histograms here are
+    pixel-value distributions (no sliding window), so a hard mask is
+    fine.  Kept private to this module; the loss path uses soft weight
+    maps via ``crm_gen.weight_maps``.
+    """
+    if mask.ndim == 3:
+        mask = np.max(mask, axis=2)
+    out = image.copy()
+    if region == "foreground":
+        out[mask == 0] = 0.0
+    elif region == "background":
+        out[mask > 0] = 0.0
+    else:
+        raise ValueError(f"Invalid region: {region!r}")
+    return out
 
 
 def _create_histogram_subplot(
@@ -184,12 +210,12 @@ def generate_detailed_plots(
         real_img = load_image(real_img_path)
         original_mask = tiff.imread(mask_path)
 
-        real_fg = extract_masked_region(real_img, original_mask, "foreground")
-        real_bg = extract_masked_region(real_img, original_mask, "background")
-        synth_fg = extract_masked_region(
+        real_fg = _extract_masked_region(real_img, original_mask, "foreground")
+        real_bg = _extract_masked_region(real_img, original_mask, "background")
+        synth_fg = _extract_masked_region(
             synthetic_img, synthetic_mask, "foreground"
         )
-        synth_bg = extract_masked_region(
+        synth_bg = _extract_masked_region(
             synthetic_img, synthetic_mask, "background"
         )
 
@@ -211,32 +237,41 @@ def generate_detailed_plots(
             power_spectrum=img_metrics.get("full_power_spectrum"),
         )
 
+        # The fit's CSV only stores SSIM / MS-SSIM per region (histogram,
+        # PSNR, power-spectrum are global under the new metrics layout).
+        # For these diagnostic plots we recompute hist + PSNR locally on
+        # the masked arrays — these are display-only numbers, not the
+        # values DE optimised against, so they're labelled with "(local)".
+        bg_hist = compute_color_distribution(real_bg, synth_bg)["histogram_distance"]
+        bg_psnr = compute_psnr(real_bg, synth_bg)["psnr"]
         ax_bg = fig.add_subplot(gs[0, 1])
         _create_histogram_subplot(
             ax_bg,
             real_bg,
             synth_bg,
             "Background Region",
-            img_metrics["bg_histogram_distance"],
+            bg_hist,
             img_metrics["bg_ssim_score"],
-            img_metrics["bg_psnr_db"],
+            bg_psnr,
             exclude_zeros=True,
             ms_ssim=img_metrics.get("bg_ms_ssim"),
-            power_spectrum=img_metrics.get("bg_power_spectrum"),
+            power_spectrum=None,  # global metric; not recomputed per region
         )
 
+        fg_hist = compute_color_distribution(real_fg, synth_fg)["histogram_distance"]
+        fg_psnr = compute_psnr(real_fg, synth_fg)["psnr"]
         ax_fg = fig.add_subplot(gs[1, 0])
         _create_histogram_subplot(
             ax_fg,
             real_fg,
             synth_fg,
             "Foreground Region (Bacteria)",
-            img_metrics["fg_histogram_distance"],
+            fg_hist,
             img_metrics["fg_ssim_score"],
-            img_metrics["fg_psnr_db"],
+            fg_psnr,
             exclude_zeros=True,
             ms_ssim=img_metrics.get("fg_ms_ssim"),
-            power_spectrum=img_metrics.get("fg_power_spectrum"),
+            power_spectrum=None,
         )
 
         ax_images = fig.add_subplot(gs[1, 1])
