@@ -19,13 +19,19 @@ save_all_synthetics = true              # Generate synthetic images for all pair
 [optimization.metric_weights]
 histogram_distance = 0.01               # Weight for histogram L1 distance
 ssim = 1.0                              # Weight for SSIM (structural similarity)
-psnr = 0.02                             # Weight for PSNR (peak signal-to-noise ratio)
 ms_ssim = 1.0                           # Weight for Multi-Scale SSIM (0 = disabled)
+gradient_ssim = 1.0                     # Weight for Sobel-edge SSIM (puts pressure on edge features)
+lpips = 1.0                             # Weight for LPIPS perceptual distance (0 = disabled). Requires `lpips` + `torch`.
 power_spectrum = 0.0                    # Weight for power spectrum distance (0 = disabled)
 
 [optimization.region_weights]
+# Soft foreground/background weight maps are built from the segmentation mask
+# via a Gaussian falloff (scipy distance transform).  `foreground_sigma_px` is
+# the pixel scale of the falloff — larger values extend the foreground's
+# sphere of influence further into the halo/fringe zone.  Typical 20-60 px.
 background = 0.5                        # Weight for background region loss
 foreground = 0.5                        # Weight for foreground region loss
+foreground_sigma_px = 30.0              # Soft falloff scale (pixels) for the foreground weight map
 
 [optimization.bounds]
 # Search bounds [min, max] for each imaging parameter during optimization.
@@ -62,10 +68,10 @@ foreground = 0.5                        # Weight for foreground region loss
 # =========================================================================
 
 [screening]
-num_trajectories = 30                   # Number of Morris trajectories
+num_trajectories = 40                   # Number of Morris trajectories
 morris_top_n = 10                       # Keep top N groups (grouped mode) or params (ungrouped) after Morris
 run_sobol = true                        # Run Sobol analysis after Morris
-sobol_n_samples = 128                   # Sobol base sample size (N)
+sobol_n_samples = 256                   # Sobol base sample size (N)
 sobol_top_n = 7                         # Keep top N params after Sobol analysis
 num_screening_images = 20               # Number of representative images for screening
 use_best_values = false                 # Fix inactive params to best values found during screening (false = registry defaults)
@@ -87,3 +93,15 @@ use_groups = true
 use_baseline_filter = true
 baseline_improvement_rate_threshold = 0.05   # Min fraction of perturbed samples that must improve over off-baseline
 baseline_improvement_epsilon = 0.01          # Min relative improvement (loss_off - min_Y) / loss_off to survive
+
+# --- Coarse pre-fit of dominant parameters ---
+# Before Morris/Sobol, run a short DE over "dominant" parameters (typically
+# `bg_base_brightness`) so the screening loss isn't drowned by their variance.
+# The dominant params rejoin the active set for the main fit, warm-started
+# from the pre-fit values.  Total main-DE active params = len(dominant_params)
+# + sobol_top_n; dominant params don't count against the top-N cap.
+[screening.coarse_prefit]
+enabled = true
+dominant_params = ["bg_base_brightness"]
+maxiter = 10
+popsize = 5
