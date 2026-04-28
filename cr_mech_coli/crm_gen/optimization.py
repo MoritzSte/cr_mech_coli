@@ -272,9 +272,10 @@ def evaluate_single_pair(
     original_mask = tiff.imread(mask_path)
 
     # Shape sanity: catch silent misalignment if the synthetic generator
-    # ever stops mirroring the input mask geometry.  Cheap; surfaces as an
-    # AssertionError rather than a confusing downstream metric failure.
-    assert synthetic_img.shape == real_img.shape, (
+    # ever stops mirroring the input mask geometry.  Compare spatial dims
+    # only — channel mismatch (RGB synthetic vs grayscale brightfield real)
+    # is handled downstream by `_ensure_grayscale` inside the metrics.
+    assert synthetic_img.shape[:2] == real_img.shape[:2], (
         f"synthetic shape {synthetic_img.shape} != real shape {real_img.shape}"
     )
     assert original_mask.shape[:2] == real_img.shape[:2], (
