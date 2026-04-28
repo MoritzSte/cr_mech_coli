@@ -38,9 +38,14 @@ DEFAULT_OPTIMIZATION_BOUNDS = get_all_bounds()
 DEFAULT_METRIC_WEIGHTS = {
     "histogram_distance": 0.01,
     "ssim": 1.0,
-    "psnr": 0.02,
-    "ms_ssim": 0.0,
+    "ms_ssim": 1.0,
+    "gradient_ssim": 1.0,
+    "lpips": 1.0,
     "power_spectrum": 0.0,
 }
 
-DEFAULT_REGION_WEIGHTS = {"background": 0.5, "foreground": 0.5}
+DEFAULT_REGION_WEIGHTS = {
+    "background": 0.5,
+    "foreground": 0.5,
+    "foreground_sigma_px": 30.0,
+}
