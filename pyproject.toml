@@ -22,6 +22,10 @@ dependencies = [
     "scipy",
     "tifffile",
     "SALib",
+    # LPIPS perceptual loss (crm_gen fit).  Can be bypassed at runtime via
+    # CRM_GEN_DISABLE_LPIPS=1 and setting the 'lpips' metric weight to 0.
+    "lpips",
+    "torch",
 ]
 [project.scripts]
 crm_fit = "cr_mech_coli:crm_fit.crm_fit_main"
