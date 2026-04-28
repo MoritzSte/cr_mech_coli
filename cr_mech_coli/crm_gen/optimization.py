@@ -29,12 +29,13 @@ import time
 import tifffile as tiff
 
 from .scene import create_synthetic_scene
-from .metrics import compute_all_metrics, load_image
+from .metrics import compute_all_metrics_with_weights, load_image
 from .config import DEFAULT_METRIC_WEIGHTS, DEFAULT_REGION_WEIGHTS
 from .parameter_registry import (
     get_param_names,
     build_full_params,
 )
+from .weight_maps import build_region_weight_maps
 
 # ============================================================================
 # Checkpoint Manager for Differential Evolution
@@ -217,7 +218,9 @@ def evaluate_single_pair(
     weights,
     region_weights,
     include_ms_ssim=False,
+    include_gradient_ssim=False,
     include_power_spectrum=False,
+    include_lpips=False,
     save=True,
 ):
     """Generate a synthetic image for one (image, mask) pair and return the loss.
@@ -225,16 +228,26 @@ def evaluate_single_pair(
     This is the single evaluation step shared by the DE optimizer and the
     sensitivity-analysis screening objectives.
 
+    Uses soft foreground / background weight maps: SSIM and friends are
+    computed once on the full image, then aggregated twice against the
+    region weight maps to produce fg / bg scores without the fake-cliff
+    artefacts of hard masking.
+
     Args:
         real_img_path: Path to the real microscope image.
         mask_path: Path to the segmentation mask.
-        params_dict: Full parameter dict (all 17 keys).
+        params_dict: Full parameter dict (all registry keys).
         temp_dir: Working directory for temporary files.
         n_vertices: Number of vertices for cell shape extraction.
         weights: Metric weights dict.
-        region_weights: Background/foreground region weights dict.
+        region_weights: Region weights dict.  Must contain
+            ``background``, ``foreground`` (mixing weights between the
+            region losses) and ``foreground_sigma_px`` (pixel-scale of the
+            soft falloff outside cells).
         include_ms_ssim: Compute Multi-Scale SSIM.
+        include_gradient_ssim: Compute SSIM on Sobel-edge maps.
         include_power_spectrum: Compute power spectrum distance.
+        include_lpips: Compute LPIPS perceptual distance.
         save: Whether to write output files to disk.
 
     Returns:
@@ -243,7 +256,7 @@ def evaluate_single_pair(
     real_img_path = Path(real_img_path)
     mask_path = Path(mask_path)
 
-    synthetic_img, synthetic_mask = create_synthetic_scene(
+    synthetic_img, _synthetic_mask = create_synthetic_scene(
         microscope_image_path=real_img_path,
         segmentation_mask_path=mask_path,
         output_dir=temp_dir,
@@ -258,29 +271,33 @@ def evaluate_single_pair(
     real_img = load_image(real_img_path)
     original_mask = tiff.imread(mask_path)
 
-    metrics_kw = dict(
-        include_ms_ssim=include_ms_ssim,
-        include_power_spectrum=include_power_spectrum,
+    # Shape sanity: catch silent misalignment if the synthetic generator
+    # ever stops mirroring the input mask geometry.  Cheap; surfaces as an
+    # AssertionError rather than a confusing downstream metric failure.
+    assert synthetic_img.shape == real_img.shape, (
+        f"synthetic shape {synthetic_img.shape} != real shape {real_img.shape}"
     )
-    metrics_full = compute_all_metrics(real_img, synthetic_img, **metrics_kw)
-    metrics_bg = compute_all_metrics(
-        extract_masked_region(real_img, original_mask, "background"),
-        extract_masked_region(synthetic_img, synthetic_mask, "background"),
-        **metrics_kw,
-    )
-    metrics_fg = compute_all_metrics(
-        extract_masked_region(real_img, original_mask, "foreground"),
-        extract_masked_region(synthetic_img, synthetic_mask, "foreground"),
-        **metrics_kw,
+    assert original_mask.shape[:2] == real_img.shape[:2], (
+        f"mask shape {original_mask.shape[:2]} != image spatial shape {real_img.shape[:2]}"
     )
 
-    return compute_weighted_loss(
-        metrics_full,
-        weights,
-        metrics_bg=metrics_bg,
-        metrics_fg=metrics_fg,
-        region_weights=region_weights,
+    sigma_px = float(
+        region_weights.get("foreground_sigma_px", DEFAULT_REGION_WEIGHTS["foreground_sigma_px"])
     )
+    w_fg, w_bg = build_region_weight_maps(original_mask, sigma_px=sigma_px)
+
+    metrics_regions = compute_all_metrics_with_weights(
+        real_img,
+        synthetic_img,
+        w_fg=w_fg,
+        w_bg=w_bg,
+        include_ms_ssim=include_ms_ssim,
+        include_gradient_ssim=include_gradient_ssim,
+        include_power_spectrum=include_power_spectrum,
+        include_lpips=include_lpips,
+    )
+
+    return compute_weighted_loss(metrics_regions, weights, region_weights=region_weights)
 
 
 # ============================================================================
@@ -289,14 +306,16 @@ def evaluate_single_pair(
 
 
 class ObjectiveFunction:
-    """
-    Picklable objective function for differential evolution.
+    """Picklable objective function for differential evolution.
 
-    Wraps the synthetic image generation and metric computation into a callable
-    that can be serialized for multiprocessing.
+    Wraps synthetic image generation + metric computation into a callable
+    that can be serialized for multiprocessing under spawn-based pools.
 
-    Supports both the legacy positional-index mode (7 fixed params) and the
-    new dynamic mode where *active_param_names* and *fixed_params* are provided.
+    The instance is constructed once and called many times by DE; each
+    call receives a 1-D vector of values in the order of
+    ``active_param_names`` and merges them with ``fixed_params`` (and
+    registry defaults for anything in neither set) via
+    :func:`build_full_params`.
     """
 
     def __init__(
@@ -331,7 +350,9 @@ class ObjectiveFunction:
         self.active_param_names = active_param_names or get_param_names()
         self.fixed_params = fixed_params or {}
         self.include_ms_ssim = weights.get("ms_ssim", 0.0) > 0
+        self.include_gradient_ssim = weights.get("gradient_ssim", 0.0) > 0
         self.include_power_spectrum = weights.get("power_spectrum", 0.0) > 0
+        self.include_lpips = weights.get("lpips", 0.0) > 0
 
     def __call__(self, x):
         """
@@ -364,7 +385,9 @@ class ObjectiveFunction:
                     weights=self.weights,
                     region_weights=self.region_weights,
                     include_ms_ssim=self.include_ms_ssim,
+                    include_gradient_ssim=self.include_gradient_ssim,
                     include_power_spectrum=self.include_power_spectrum,
+                    include_lpips=self.include_lpips,
                     save=False,
                 )
                 total_loss += loss
@@ -437,98 +460,71 @@ def find_real_images(input_dir: Path, limit: int = None) -> List[Tuple[Path, Pat
 
 
 def compute_weighted_loss(
-    metrics: Dict,
+    metrics_regions: Dict[str, Dict[str, float]],
     weights: Dict,
-    metrics_bg: Optional[Dict] = None,
-    metrics_fg: Optional[Dict] = None,
     region_weights: Optional[Dict] = None,
 ) -> float:
-    """
-    Compute weighted loss from metrics dictionary.
+    """Compute the scalar weighted loss from region-partitioned metrics.
 
-    Combines histogram distance, SSIM, and PSNR into a single scalar loss.
-    Optionally computes region-specific losses for background and foreground.
+    Accepts the output of
+    :func:`crm_gen.metrics.compute_all_metrics_with_weights` — a dict with
+    ``"full"``, ``"fg"`` and ``"bg"`` entries, each a flat summary mapping
+    metric-name → score.
+
+    Region-split (SSIM / MS-SSIM / gradient-SSIM) terms are mixed per
+    ``region_weights["background"]`` and ``region_weights["foreground"]``.
+    Global-only terms (histogram distance, LPIPS, power spectrum) are
+    taken from the ``"full"`` bucket and added without region mixing —
+    they're defined over the whole image and would be double-counted via
+    the region mixer.
+
+    Note: this signature replaced the older
+    ``(metrics, weights, metrics_bg=, metrics_fg=, region_weights=)`` form
+    used before the soft-weight-map refactor.  External callers should
+    pass the dict produced by ``compute_all_metrics_with_weights``.
 
     Args:
-        metrics (Dict): Full image metrics from compute_all_metrics().
-        weights (Dict): Weights for each metric ('histogram_distance', 'ssim', 'psnr').
-        metrics_bg (Dict): Background region metrics. If None, uses full image only.
-        metrics_fg (Dict): Foreground region metrics. If None, uses full image only.
-        region_weights (Dict): Weights for 'background' and 'foreground' regions.
+        metrics_regions: Dict with keys ``full`` / ``fg`` / ``bg``.
+        weights: Metric-name → weight.
+        region_weights: ``background`` + ``foreground`` mixing weights.
 
     Returns:
-        float: Weighted loss value (lower is better).
+        Weighted loss (lower is better).
     """
+    if region_weights is None:
+        region_weights = DEFAULT_REGION_WEIGHTS
 
-    def compute_loss_from_summary(summary: Dict) -> float:
-        hist_dist = summary["histogram_distance"]
-        ssim_score = summary["ssim_score"]
-        psnr_db = summary["psnr_db"]
-
-        loss = (
-            weights["histogram_distance"] * hist_dist
-            + weights["ssim"] * (1.0 - ssim_score)
-            + weights["psnr"] * (1.0 / max(psnr_db, 1.0))
-        )
+    def per_region_loss(summary: Dict[str, float]) -> float:
+        loss = 0.0
+        if "ssim_score" in summary:
+            loss += weights.get("ssim", 0.0) * (1.0 - summary["ssim_score"])
         if "ms_ssim_score" in summary and weights.get("ms_ssim", 0.0) > 0:
             loss += weights["ms_ssim"] * (1.0 - summary["ms_ssim_score"])
-        if "power_spectrum_distance" in summary and weights.get("power_spectrum", 0.0) > 0:
-            loss += weights["power_spectrum"] * summary["power_spectrum_distance"]
-
+        if "gradient_ssim_score" in summary and weights.get("gradient_ssim", 0.0) > 0:
+            loss += weights["gradient_ssim"] * (1.0 - summary["gradient_ssim_score"])
         return loss
 
-    if metrics_bg is not None and metrics_fg is not None:
-        if region_weights is None:
-            region_weights = DEFAULT_REGION_WEIGHTS
+    fg_summary = metrics_regions["fg"]
+    bg_summary = metrics_regions["bg"]
+    full_summary = metrics_regions["full"]
 
-        bg_loss = compute_loss_from_summary(metrics_bg["summary"])
-        fg_loss = compute_loss_from_summary(metrics_fg["summary"])
+    total = (
+        region_weights["background"] * per_region_loss(bg_summary)
+        + region_weights["foreground"] * per_region_loss(fg_summary)
+    )
 
-        total_loss = (
-            region_weights["background"] * bg_loss
-            + region_weights["foreground"] * fg_loss
-        )
+    # Global-only terms (not region-partitioned).
+    if "histogram_distance" in full_summary:
+        total += weights.get("histogram_distance", 0.0) * full_summary["histogram_distance"]
+    if "lpips_distance" in full_summary and weights.get("lpips", 0.0) > 0:
+        total += weights["lpips"] * full_summary["lpips_distance"]
+    if (
+        "power_spectrum_distance" in full_summary
+        and weights.get("power_spectrum", 0.0) > 0
+    ):
+        total += weights["power_spectrum"] * full_summary["power_spectrum_distance"]
 
-        return total_loss
-    else:
-        return compute_loss_from_summary(metrics["summary"])
-
-
-def extract_masked_region(
-    image: np.ndarray, mask: np.ndarray, region: str
-) -> np.ndarray:
-    """
-    Extract foreground or background region from image using mask.
-
-    Args:
-        image (np.ndarray): Input image (float [0,1]).
-        mask (np.ndarray): Segmentation mask (2D or 3D).
-        region (str): Region to extract: 'foreground' or 'background'.
-
-    Returns:
-        np.ndarray: Image with the non-selected region zeroed out.
-    """
-    if len(mask.shape) == 3:
-        mask = np.max(mask, axis=2)
-
-    img_spatial = image.shape[:2]
-    if img_spatial != mask.shape[:2]:
-        raise ValueError(
-            f"Image and mask spatial shapes must match: {img_spatial} vs {mask.shape[:2]}"
-        )
-
-    extracted = image.copy()
-
-    if region == "foreground":
-        extracted[mask == 0] = 0.0
-    elif region == "background":
-        extracted[mask > 0] = 0.0
-    else:
-        raise ValueError(
-            f"Invalid region: {region}. Must be 'foreground' or 'background'"
-        )
-
-    return extracted
+    return total
 
 
 def optimize_parameters(
@@ -546,6 +542,7 @@ def optimize_parameters(
     active_param_names: List[str] = None,
     fixed_params: Dict = None,
     checkpoint_dir: Path = None,
+    init_seed_x: Optional[np.ndarray] = None,
 ) -> Dict:
     """
     Optimize synthetic image parameters using differential evolution.
@@ -652,6 +649,31 @@ def optimize_parameters(
                     print("Checkpoint validation failed, starting fresh")
             else:
                 print("No checkpoint found, starting fresh")
+
+        # Warm-start the init population with a caller-supplied seed vector.
+        # Only applied when we're not resuming from a checkpoint (the checkpoint
+        # already carries a valid population).
+        if init_seed_x is not None and isinstance(init_population, str):
+            init_seed_x = np.asarray(init_seed_x, dtype=float)
+            if init_seed_x.shape != (len(bounds),):
+                raise ValueError(
+                    f"init_seed_x has shape {init_seed_x.shape}; expected ({len(bounds)},)"
+                )
+            rng = np.random.default_rng(seed)
+            n_pop = popsize * len(bounds)
+            lo = np.array([b[0] for b in bounds])
+            hi = np.array([b[1] for b in bounds])
+            # Latin-hypercube the rest of the population; row 0 holds the seed.
+            rest = lo + rng.random((max(n_pop - 1, 0), len(bounds))) * (hi - lo)
+            seeded = np.vstack([init_seed_x[None, :], rest])
+            # Clamp seed into bounds in case it's slightly outside (e.g. due to
+            # rounding in the caller's scaling).
+            seeded[0] = np.clip(seeded[0], lo, hi)
+            init_population = seeded
+            print(
+                f"Seeding DE init population with caller-supplied values for "
+                f"{len(init_seed_x)} parameters."
+            )
 
         remaining_iters = max(1, maxiter - start_iter)
         iteration_counter = [start_iter]
@@ -821,35 +843,52 @@ def compute_final_metrics(
     output_dir: Path,
     n_vertices: int,
     weights: Dict = None,
+    region_weights: Dict = None,
 ) -> Tuple[Dict, List[Dict], Dict]:
-    """
-    Compute final metrics for all images with optimized parameters.
+    """Compute final metrics for all images with optimized parameters.
 
-    Generates synthetic images for each pair using the optimized parameters and
-    computes full, foreground, and background metrics.
+    Generates the synthetic image for each pair using the optimized
+    parameters and computes the per-image metrics using the same soft
+    foreground/background weight-map machinery the DE inner loop uses.
+    The CSV columns therefore reflect the values DE actually optimised
+    against, not a different (and previously incompatible) hard-mask
+    flavour.
 
     Args:
-        image_pairs (List[Tuple[Path, Path]]): List of (image_path, mask_path) tuples.
-        params (Dict): Optimized parameter dictionary.
-        output_dir (Path): Output directory for temporary files.
-        n_vertices (int): Number of vertices for cell shape extraction.
-        weights (Dict): Metric weights. When provided, metrics with weight > 0
-            for ``ms_ssim`` or ``power_spectrum`` are included in the report.
+        image_pairs: List of ``(image_path, mask_path)`` tuples.
+        params: Optimized parameter dictionary.
+        output_dir: Output directory (currently passed through; not used
+            for IO inside this function — synth_cache is returned for the
+            caller to write).
+        n_vertices: Vertices per cell for shape extraction.
+        weights: Metric weights.  ``ms_ssim``, ``gradient_ssim``,
+            ``power_spectrum``, ``lpips`` are included when their weight
+            is > 0.
+        region_weights: Region weights dict (must contain
+            ``foreground_sigma_px``).  Falls back to
+            ``DEFAULT_REGION_WEIGHTS`` when not supplied.
 
     Returns:
-        Tuple[Dict, List[Dict], Dict]: (average_metrics, per_image_metrics, synth_cache)
-            where average_metrics contains mean values, per_image_metrics is a list
-            of per-image metric dictionaries, and synth_cache maps image names to
-            (synthetic_img_float, synthetic_mask) tuples for reuse by visualization.
+        ``(avg_metrics, per_image_metrics, synth_cache)``.  The CSV
+        columns are: ``full_histogram_distance``, ``full_psnr_db``,
+        ``full/fg/bg_ssim_score``, plus optional ``full/fg/bg_ms_ssim``,
+        ``full/fg/bg_gradient_ssim_score``, ``full_power_spectrum``,
+        ``full_lpips_distance``.  PSNR / histogram / power spectrum /
+        LPIPS are global only — region columns for those were removed
+        when the metrics path moved to the soft-weight-map model.
     """
     print("\nComputing final metrics with optimized parameters...")
 
     include_ms_ssim = weights.get("ms_ssim", 0.0) > 0 if weights else False
+    include_gradient_ssim = weights.get("gradient_ssim", 0.0) > 0 if weights else False
     include_power_spectrum = weights.get("power_spectrum", 0.0) > 0 if weights else False
-    metrics_kw = dict(
-        include_ms_ssim=include_ms_ssim,
-        include_power_spectrum=include_power_spectrum,
-    )
+    include_lpips = weights.get("lpips", 0.0) > 0 if weights else False
+
+    if region_weights is None:
+        region_weights = DEFAULT_REGION_WEIGHTS
+    sigma_px = float(region_weights.get(
+        "foreground_sigma_px", DEFAULT_REGION_WEIGHTS["foreground_sigma_px"]
+    ))
 
     per_image_metrics = []
     synth_cache = {}
@@ -872,40 +911,46 @@ def compute_final_metrics(
         real_img = load_image(real_img_path)
         original_mask = tiff.imread(mask_path)
 
-        real_fg = extract_masked_region(real_img, original_mask, "foreground")
-        real_bg = extract_masked_region(real_img, original_mask, "background")
+        w_fg, w_bg = build_region_weight_maps(original_mask, sigma_px=sigma_px)
 
-        synth_fg = extract_masked_region(
-            synthetic_img, synthetic_mask, "foreground"
-        )
-        synth_bg = extract_masked_region(
-            synthetic_img, synthetic_mask, "background"
+        regions = compute_all_metrics_with_weights(
+            real_img,
+            synthetic_img,
+            w_fg=w_fg,
+            w_bg=w_bg,
+            include_ms_ssim=include_ms_ssim,
+            include_gradient_ssim=include_gradient_ssim,
+            include_power_spectrum=include_power_spectrum,
+            include_lpips=include_lpips,
         )
 
-        metrics_full = compute_all_metrics(real_img, synthetic_img, **metrics_kw)
-        metrics_fg = compute_all_metrics(real_fg, synth_fg, **metrics_kw)
-        metrics_bg = compute_all_metrics(real_bg, synth_bg, **metrics_kw)
+        full = regions["full"]
+        fg = regions["fg"]
+        bg = regions["bg"]
 
         entry = {
             "image_name": real_img_path.name,
-            "full_histogram_distance": metrics_full["summary"]["histogram_distance"],
-            "full_ssim_score": metrics_full["summary"]["ssim_score"],
-            "full_psnr_db": metrics_full["summary"]["psnr_db"],
-            "fg_histogram_distance": metrics_fg["summary"]["histogram_distance"],
-            "fg_ssim_score": metrics_fg["summary"]["ssim_score"],
-            "fg_psnr_db": metrics_fg["summary"]["psnr_db"],
-            "bg_histogram_distance": metrics_bg["summary"]["histogram_distance"],
-            "bg_ssim_score": metrics_bg["summary"]["ssim_score"],
-            "bg_psnr_db": metrics_bg["summary"]["psnr_db"],
+            # Global-only columns (no fg/bg counterparts under the new model).
+            "full_histogram_distance": full["histogram_distance"],
+            "full_psnr_db": full["psnr_db"],
+            # SSIM is region-partitioned.
+            "full_ssim_score": full["ssim_score"],
+            "fg_ssim_score": fg["ssim_score"],
+            "bg_ssim_score": bg["ssim_score"],
         }
-        if "ms_ssim_score" in metrics_full["summary"]:
-            entry["full_ms_ssim"] = metrics_full["summary"]["ms_ssim_score"]
-            entry["fg_ms_ssim"] = metrics_fg["summary"]["ms_ssim_score"]
-            entry["bg_ms_ssim"] = metrics_bg["summary"]["ms_ssim_score"]
-        if "power_spectrum_distance" in metrics_full["summary"]:
-            entry["full_power_spectrum"] = metrics_full["summary"]["power_spectrum_distance"]
-            entry["fg_power_spectrum"] = metrics_fg["summary"]["power_spectrum_distance"]
-            entry["bg_power_spectrum"] = metrics_bg["summary"]["power_spectrum_distance"]
+        if include_ms_ssim:
+            entry["full_ms_ssim"] = full["ms_ssim_score"]
+            entry["fg_ms_ssim"] = fg["ms_ssim_score"]
+            entry["bg_ms_ssim"] = bg["ms_ssim_score"]
+        if include_gradient_ssim:
+            entry["full_gradient_ssim_score"] = full["gradient_ssim_score"]
+            entry["fg_gradient_ssim_score"] = fg["gradient_ssim_score"]
+            entry["bg_gradient_ssim_score"] = bg["gradient_ssim_score"]
+        if include_power_spectrum:
+            entry["full_power_spectrum"] = full["power_spectrum_distance"]
+        if include_lpips:
+            entry["full_lpips_distance"] = full["lpips_distance"]
+
         per_image_metrics.append(entry)
 
     # Dynamically average all numeric keys
@@ -917,19 +962,15 @@ def compute_final_metrics(
 
     print("\nAverage metrics across all images:")
     print(
-        f"  Full Image - Histogram: {avg_metrics.get('full_histogram_distance', 0):.4f}, "
+        f"  Full       - Histogram: {avg_metrics.get('full_histogram_distance', 0):.4f}, "
         f"SSIM: {avg_metrics.get('full_ssim_score', 0):.4f}, "
         f"PSNR: {avg_metrics.get('full_psnr_db', 0):.2f} dB"
     )
     print(
-        f"  Foreground - Histogram: {avg_metrics.get('fg_histogram_distance', 0):.4f}, "
-        f"SSIM: {avg_metrics.get('fg_ssim_score', 0):.4f}, "
-        f"PSNR: {avg_metrics.get('fg_psnr_db', 0):.2f} dB"
+        f"  Foreground - SSIM: {avg_metrics.get('fg_ssim_score', 0):.4f}"
     )
     print(
-        f"  Background - Histogram: {avg_metrics.get('bg_histogram_distance', 0):.4f}, "
-        f"SSIM: {avg_metrics.get('bg_ssim_score', 0):.4f}, "
-        f"PSNR: {avg_metrics.get('bg_psnr_db', 0):.2f} dB"
+        f"  Background - SSIM: {avg_metrics.get('bg_ssim_score', 0):.4f}"
     )
     if include_ms_ssim:
         print(
@@ -937,12 +978,16 @@ def compute_final_metrics(
             f"FG: {avg_metrics.get('fg_ms_ssim', 0):.4f}, "
             f"BG: {avg_metrics.get('bg_ms_ssim', 0):.4f}"
         )
-    if include_power_spectrum:
+    if include_gradient_ssim:
         print(
-            f"  PSD        - Full: {avg_metrics.get('full_power_spectrum', 0):.4f}, "
-            f"FG: {avg_metrics.get('fg_power_spectrum', 0):.4f}, "
-            f"BG: {avg_metrics.get('bg_power_spectrum', 0):.4f}"
+            f"  Grad-SSIM  - Full: {avg_metrics.get('full_gradient_ssim_score', 0):.4f}, "
+            f"FG: {avg_metrics.get('fg_gradient_ssim_score', 0):.4f}, "
+            f"BG: {avg_metrics.get('bg_gradient_ssim_score', 0):.4f}"
         )
+    if include_power_spectrum:
+        print(f"  PSD (full) : {avg_metrics.get('full_power_spectrum', 0):.4f}")
+    if include_lpips:
+        print(f"  LPIPS (full): {avg_metrics.get('full_lpips_distance', 0):.4f}")
 
     return avg_metrics, per_image_metrics, synth_cache
 
@@ -1007,3 +1052,106 @@ def generate_all_synthetics(
         )
 
     print(f"  Saved synthetic images to: {synth_dir}")
+
+
+# ============================================================================
+# Coarse pre-fit for dominant parameters
+# ============================================================================
+
+
+def coarse_prefit(
+    image_pairs: List[Tuple[Path, Path]],
+    dominant_params: List[str],
+    weights: Dict,
+    region_weights: Dict,
+    maxiter: int = 10,
+    popsize: int = 5,
+    workers: int = -1,
+    seed: int = 0,
+    n_vertices: int = 8,
+    fixed_params: Dict = None,
+) -> Dict[str, float]:
+    """Short DE fit over ``dominant_params`` only; returns best-value dict.
+
+    Purpose: before Morris / Sobol screening, park the dominant parameters
+    (typically ``bg_base_brightness``) near their optimum so the screening
+    loss isn't drowned in their variance.  Subordinate parameters can then
+    have their real sensitivity measured.
+
+    The dominant parameters rejoin the active set for the main DE fit —
+    this pre-fit only provides good pinned values for screening and a warm
+    start for the main fit.
+
+    Args:
+        image_pairs: (real, mask) pairs used for the fit.
+        dominant_params: Parameter names to pre-fit.  Anything not in this
+            list is treated as fixed at its default (or at the value in
+            ``fixed_params`` if provided).
+        weights, region_weights: Same metric / region weight dicts used by
+            the main fit.  Keeping them consistent means the pre-fit
+            optimises the same loss the main fit will.
+        maxiter: Iterations for the coarse DE.  Small — the goal is
+            near-optimal, not converged.
+        popsize: Population multiplier.
+        workers, seed, n_vertices: Forwarded to
+            :func:`optimize_parameters`.
+        fixed_params: Starting values for non-dominant parameters.  If
+            None, registry defaults are used implicitly via
+            ``build_full_params``.
+
+    Returns:
+        Dict mapping each name in ``dominant_params`` to its best-fit
+        scalar value.
+    """
+    from .parameter_registry import PARAMETER_REGISTRY
+
+    if not dominant_params:
+        return {}
+
+    fixed_params = dict(fixed_params or {})
+
+    bounds = []
+    for name in dominant_params:
+        if name not in PARAMETER_REGISTRY:
+            raise ValueError(
+                f"Coarse pre-fit: unknown parameter '{name}'. "
+                f"Not present in PARAMETER_REGISTRY."
+            )
+        bounds.append(PARAMETER_REGISTRY[name].bounds)
+
+    print("\n" + "=" * 80)
+    print("COARSE PRE-FIT (dominant parameters)")
+    print("=" * 80)
+    print(f"Parameters: {', '.join(dominant_params)}")
+    print(f"Budget: maxiter={maxiter}, popsize={popsize}")
+    print("=" * 80)
+
+    result = optimize_parameters(
+        image_pairs=image_pairs,
+        bounds=bounds,
+        weights=weights,
+        region_weights=region_weights,
+        maxiter=maxiter,
+        popsize=popsize,
+        workers=workers,
+        seed=seed,
+        n_vertices=n_vertices,
+        resume=False,
+        no_checkpoint=True,
+        active_param_names=list(dominant_params),
+        fixed_params=fixed_params,
+        checkpoint_dir=None,
+    )
+
+    best_values = {}
+    params_out = result.get("parameters", {})
+    for name in dominant_params:
+        if name in params_out:
+            best_values[name] = float(params_out[name])
+
+    print("\nCoarse pre-fit results:")
+    for name, val in best_values.items():
+        print(f"  {name} = {val:.6g}")
+    print("=" * 80 + "\n")
+
+    return best_values
