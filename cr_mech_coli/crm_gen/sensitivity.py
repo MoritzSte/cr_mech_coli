@@ -103,13 +103,22 @@ class SobolResult:
 
 @dataclass
 class ScreeningResult:
-    """Combined results from the full screening pipeline."""
+    """Combined results from the full screening pipeline.
+
+    ``prefit_values`` carries the dominant-parameter best values found by
+    a coarse pre-fit (see :func:`crm_gen.optimization.coarse_prefit`).
+    These are NOT in ``active_params`` or ``fixed_values`` — they're a
+    third bucket meant to (a) seed the main DE init population and (b)
+    rejoin the active set when the screening JSON is loaded later.  Older
+    screening JSONs without the field load with ``prefit_values = {}``.
+    """
 
     morris: Optional[MorrisResult] = None
     sobol: Optional[SobolResult] = None
     active_params: List[str] = field(default_factory=list)
     inactive_params: List[str] = field(default_factory=list)
     fixed_values: Dict[str, float] = field(default_factory=dict)
+    prefit_values: Dict[str, float] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -717,6 +726,8 @@ def run_full_screening(
     use_baseline_filter: bool = True,
     baseline_improvement_rate_threshold: float = 0.05,
     baseline_improvement_epsilon: float = 0.01,
+    param_names: Optional[List[str]] = None,
+    fixed_params: Optional[Dict[str, float]] = None,
 ) -> ScreeningResult:
     """Run the full Morris → Sobol screening pipeline.
 
@@ -743,12 +754,17 @@ def run_full_screening(
     Returns:
         ScreeningResult with the final active/inactive parameter sets.
     """
-    all_names = get_param_names()
+    # ``param_names`` lets the caller restrict screening to a subset —
+    # e.g. when dominant parameters have been pre-fitted and pinned via
+    # ``fixed_params``, they should not participate in Morris/Sobol.
+    all_names = list(param_names) if param_names is not None else get_param_names()
+    fixed_params = dict(fixed_params or {})
 
     # Stage 1: Morris
     morris_result = run_morris_screening(
         image_pairs=image_pairs,
         param_names=all_names,
+        fixed_params=fixed_params,
         weights=weights,
         region_weights=region_weights,
         num_trajectories=num_trajectories,
@@ -786,9 +802,12 @@ def run_full_screening(
             return morris_result.best_params[name]
         return defaults[name]
 
+    # Merge caller-supplied fixed_params (e.g. coarse-prefit dominants) with
+    # the ones Morris picked to hold fixed for stage 2.
     fixed_after_morris = {
         n: _fixed_value_for(n) for n in morris_result.inactive_params
     }
+    fixed_after_morris.update(fixed_params)
 
     sobol_result = None
     if run_sobol and len(active_after_morris) > 1:
@@ -860,6 +879,7 @@ def save_screening_results(result: ScreeningResult, path: Path) -> None:
         "active_params": result.active_params,
         "inactive_params": result.inactive_params,
         "fixed_values": result.fixed_values,
+        "prefit_values": result.prefit_values,
     }
     if result.morris is not None:
         data["morris"] = {
@@ -946,4 +966,7 @@ def load_screening_results(path: Path) -> ScreeningResult:
         active_params=data["active_params"],
         inactive_params=data["inactive_params"],
         fixed_values=data["fixed_values"],
+        # `.get` keeps backwards compatibility with screening JSONs written
+        # before the prefit_values field existed.
+        prefit_values=data.get("prefit_values", {}),
     )
