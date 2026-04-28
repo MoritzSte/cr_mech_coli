@@ -15,6 +15,9 @@ import sys
 import shutil
 from pathlib import Path
 from datetime import datetime
+from typing import Dict
+
+import numpy as np
 
 
 def _build_run_parser(subparsers, default_gen_config):
@@ -415,6 +418,7 @@ def _run_fit(args, config, config_path):
         compute_final_metrics,
         save_results,
         generate_all_synthetics,
+        coarse_prefit,
     )
     from .parameter_registry import get_param_names, PARAMETER_REGISTRY
     from .visualization import generate_comparison_plot, generate_detailed_plots
@@ -444,6 +448,22 @@ def _run_fit(args, config, config_path):
     active_param_names = None
     fixed_params = None
     screening_result = None
+    prefit_values: Dict[str, float] = {}
+
+    def _rejoin_dominants(active, fixed, prefit_vals):
+        """Return (active', fixed') with prefit-dominant params restored as active.
+
+        Idempotent — if a name in ``prefit_vals`` is already in ``active``
+        we leave it alone; if it's somehow in ``fixed`` we pop it out.
+        Empty ``prefit_vals`` (e.g. older screening JSON) is a no-op.
+        """
+        active = list(active)
+        fixed = dict(fixed)
+        for name in prefit_vals:
+            if name not in active:
+                active.append(name)
+            fixed.pop(name, None)
+        return active, fixed
 
     if hasattr(args, "screening_results") and args.screening_results:
         # Load pre-computed screening results
@@ -451,9 +471,15 @@ def _run_fit(args, config, config_path):
 
         print(f"Loading screening results from: {args.screening_results}")
         screening_result = load_screening_results(Path(args.screening_results))
-        active_param_names = screening_result.active_params
-        fixed_params = screening_result.fixed_values
-        print(f"Active parameters: {len(active_param_names)}")
+        prefit_values = dict(screening_result.prefit_values)
+        active_param_names, fixed_params = _rejoin_dominants(
+            screening_result.active_params,
+            screening_result.fixed_values,
+            prefit_values,
+        )
+        print(f"Active parameters: {len(active_param_names)}"
+              + (f" (incl. {len(prefit_values)} pre-fit dominant(s))"
+                 if prefit_values else ""))
         print(f"Fixed parameters: {len(fixed_params)}")
 
     elif hasattr(args, "auto_screen") and args.auto_screen:
@@ -463,6 +489,28 @@ def _run_fit(args, config, config_path):
         screen_config = config.get("screening", {})
         num_screen_images = screen_config.get("num_screening_images", 2)
         screen_pairs = find_real_images(Path(input_dir), limit=num_screen_images)
+
+        # --- Coarse pre-fit of dominant parameters (optional) -----------
+        # Pre-fits the parameters the user declares "dominant" (typically
+        # bg_base_brightness) so their value no longer hijacks the
+        # screening sensitivity analysis.  The dominant parameters rejoin
+        # the active set for the main DE fit afterwards.
+        prefit_cfg = screen_config.get("coarse_prefit", {})
+        prefit_enabled = prefit_cfg.get("enabled", False)
+        dominant_params = list(prefit_cfg.get("dominant_params", []))
+
+        if prefit_enabled and dominant_params:
+            prefit_values = coarse_prefit(
+                image_pairs=screen_pairs,
+                dominant_params=dominant_params,
+                weights=weights,
+                region_weights=region_weights,
+                maxiter=int(prefit_cfg.get("maxiter", 10)),
+                popsize=int(prefit_cfg.get("popsize", 5)),
+                workers=workers,
+                seed=seed,
+                n_vertices=n_vertices,
+            )
 
         use_best_values = screen_config.get("use_best_values", False)
         screening_result = run_full_screening(
@@ -486,9 +534,24 @@ def _run_fit(args, config, config_path):
             baseline_improvement_epsilon=screen_config.get(
                 "baseline_improvement_epsilon", 0.01
             ),
+            fixed_params={**(prefit_values or {})},
+            param_names=[
+                n for n in get_param_names() if n not in prefit_values
+            ] if prefit_values else None,
         )
-        active_param_names = screening_result.active_params
-        fixed_params = screening_result.fixed_values
+        # Persist the dominant pre-fit values on the screening result BEFORE
+        # writing it to disk, so a later `--screening-results` resume can
+        # find them and warm-start the main DE.
+        screening_result.prefit_values = dict(prefit_values)
+
+        # Dominant params rejoin the main DE: always active, excluded from
+        # the screening cap, removed from fixed_values (they're variables
+        # again), and their pre-fit values seed the DE init population.
+        active_param_names, fixed_params = _rejoin_dominants(
+            screening_result.active_params,
+            screening_result.fixed_values,
+            prefit_values,
+        )
 
     # Default to all registry parameters if no screening was used
     if active_param_names is None:
@@ -533,6 +596,22 @@ def _run_fit(args, config, config_path):
     # Find image pairs
     image_pairs = find_real_images(Path(input_dir), limit=limit)
 
+    # Build the DE init seed from the coarse pre-fit values (if any) so the
+    # main run starts with dominant parameters near their optimum.  The
+    # remaining dimensions fall back to their registry default.
+    init_seed_x = None
+    if prefit_values:
+        from .parameter_registry import get_all_defaults
+        defaults = get_all_defaults()
+        seed_vec = []
+        for name, (lo, hi) in zip(active_param_names, bounds):
+            if name in prefit_values:
+                seed_vec.append(float(prefit_values[name]))
+            else:
+                # Default may be outside narrowed bounds in edge cases.
+                seed_vec.append(float(np.clip(defaults.get(name, (lo + hi) / 2), lo, hi)))
+        init_seed_x = np.array(seed_vec, dtype=float)
+
     # Optimize parameters
     results = optimize_parameters(
         image_pairs=image_pairs,
@@ -549,6 +628,7 @@ def _run_fit(args, config, config_path):
         active_param_names=active_param_names,
         fixed_params=fixed_params,
         checkpoint_dir=output_dir / "checkpoints",
+        init_seed_x=init_seed_x,
     )
 
     # Compute final metrics
@@ -558,6 +638,7 @@ def _run_fit(args, config, config_path):
         output_dir=output_dir,
         n_vertices=n_vertices,
         weights=weights,
+        region_weights=region_weights,
     )
 
     # Save results
