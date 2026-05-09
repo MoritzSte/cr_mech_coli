@@ -126,17 +126,38 @@ def _build_fit_parser(subparsers, default_fit_config):
         help="Path to fit TOML config file",
     )
     fit_parser.add_argument(
+        "--mode",
+        type=str,
+        default=None,
+        choices=["fluorescence", "phase_contrast", "brightfield", "all"],
+        help="Microscopy mode for parameter pool gating. Excludes filters "
+        "irrelevant to the chosen mode (e.g., halo for brightfield). "
+        "CLI value overrides the TOML 'imaging_mode' field. Default: read "
+        "from config or 'all' (legacy unified pool).",
+    )
+    fit_parser.add_argument(
         "--auto-screen",
         action="store_true",
         default=False,
         help="Run Morris+Sobol screening before optimization to auto-discover "
-        "relevant parameters",
+        "relevant parameters. Diagnostic only — Morris/Sobol can flag "
+        "parameters whose loss-changes are large but whose loss-minimum "
+        "is at off (e.g. halo against a brightfield reference).",
     )
     fit_parser.add_argument(
         "--screening-results",
         type=str,
         default=None,
         help="Path to pre-computed screening results JSON (from 'crm_gen screen')",
+    )
+    fit_parser.add_argument(
+        "--warm-start-samples",
+        type=int,
+        default=None,
+        help="Number of Latin-hypercube samples for the random-search warm-start "
+        "(plays the role of Morris's best_idx at far lower cost). 0 disables. "
+        "Default: read from TOML [optimization].warm_start_samples or 200 "
+        "when no screening result is supplied; 0 when one is.",
     )
 
 
@@ -166,6 +187,15 @@ def _build_screen_parser(subparsers, default_fit_config):
         type=str,
         default=str(default_fit_config) if default_fit_config.exists() else None,
         help="Path to fit TOML config file (uses [screening] section)",
+    )
+    screen_parser.add_argument(
+        "--mode",
+        type=str,
+        default=None,
+        choices=["fluorescence", "phase_contrast", "brightfield", "all"],
+        help="Microscopy mode for parameter pool gating. CLI value "
+        "overrides the TOML 'imaging_mode' field. Default: read from "
+        "config or 'all' (legacy unified pool).",
     )
     screen_parser.add_argument(
         "--skip-sobol",
@@ -334,6 +364,36 @@ def _extract_weights(opt_config):
     return weights, region_weights
 
 
+def _resolve_imaging_mode(args, config) -> str:
+    """Resolve the imaging mode to use for this run.
+
+    Precedence: CLI ``--mode`` > top-level ``imaging_mode`` in TOML >
+    ``[optimization].imaging_mode`` > ``[screening].imaging_mode`` >
+    ``DEFAULT_IMAGING_MODE`` ("all").
+
+    Returns:
+        One of "fluorescence", "phase_contrast", "brightfield", "all".
+    """
+    from .config import DEFAULT_IMAGING_MODE, VALID_IMAGING_MODES
+
+    cli_mode = getattr(args, "mode", None)
+    if cli_mode is not None:
+        return cli_mode
+
+    # TOML lookup, top-level first then per-section.
+    mode = (
+        config.get("imaging_mode")
+        or config.get("optimization", {}).get("imaging_mode")
+        or config.get("screening", {}).get("imaging_mode")
+        or DEFAULT_IMAGING_MODE
+    )
+    if mode not in VALID_IMAGING_MODES:
+        raise ValueError(
+            f"Unknown imaging_mode {mode!r}. Expected one of: {VALID_IMAGING_MODES}"
+        )
+    return mode
+
+
 def _run_screen(args, config, config_path):
     """
     Run sensitivity analysis to discover relevant parameters.
@@ -371,6 +431,15 @@ def _run_screen(args, config, config_path):
 
     weights, region_weights = _extract_weights(opt_config)
 
+    # Resolve mode and gate the screening pool.
+    imaging_mode = _resolve_imaging_mode(args, config)
+    from .parameter_registry import get_param_names_for_mode
+
+    param_names = get_param_names_for_mode(imaging_mode)
+    print(
+        f"Imaging mode: {imaging_mode!r} ({len(param_names)} parameters in scope)"
+    )
+
     # Find image pairs (limited to num_images for screening)
     image_pairs = find_real_images(Path(args.input_dir), limit=num_images)
 
@@ -379,6 +448,7 @@ def _run_screen(args, config, config_path):
     # Run screening
     result = run_full_screening(
         image_pairs=image_pairs,
+        param_names=param_names,
         weights=weights,
         region_weights=region_weights,
         num_trajectories=num_trajectories,
@@ -419,8 +489,13 @@ def _run_fit(args, config, config_path):
         save_results,
         generate_all_synthetics,
         coarse_prefit,
+        random_search_warmstart,
     )
-    from .parameter_registry import get_param_names, PARAMETER_REGISTRY
+    from .parameter_registry import (
+        get_param_names,
+        get_param_names_for_mode,
+        PARAMETER_REGISTRY,
+    )
     from .visualization import generate_comparison_plot, generate_detailed_plots
 
     opt_config = config.get("optimization", {})
@@ -443,6 +518,18 @@ def _run_fit(args, config, config_path):
 
     # Metric and region weights
     weights, region_weights = _extract_weights(opt_config)
+
+    # Microscopy mode (gates the parameter pool)
+    imaging_mode = _resolve_imaging_mode(args, config)
+    print(
+        f"Imaging mode: {imaging_mode!r} "
+        f"({len(get_param_names_for_mode(imaging_mode))} params in scope)"
+    )
+
+    # Warm-start budget — CLI > TOML > sensible default
+    warm_start_samples = args.warm_start_samples
+    if warm_start_samples is None:
+        warm_start_samples = int(opt_config.get("warm_start_samples", 200))
 
     # --- Determine active parameters ---
     active_param_names = None
@@ -512,9 +599,15 @@ def _run_fit(args, config, config_path):
                 n_vertices=n_vertices,
             )
 
+        # Mode-gated screening pool (minus the prefit dominants, which are
+        # held fixed for the screening run and rejoin DE afterwards).
+        mode_pool = get_param_names_for_mode(imaging_mode)
+        screen_pool = [n for n in mode_pool if n not in prefit_values]
+
         use_best_values = screen_config.get("use_best_values", False)
         screening_result = run_full_screening(
             image_pairs=screen_pairs,
+            param_names=screen_pool,
             weights=weights,
             region_weights=region_weights,
             num_trajectories=screen_config.get("num_trajectories", 10),
@@ -535,9 +628,6 @@ def _run_fit(args, config, config_path):
                 "baseline_improvement_epsilon", 0.01
             ),
             fixed_params={**(prefit_values or {})},
-            param_names=[
-                n for n in get_param_names() if n not in prefit_values
-            ] if prefit_values else None,
         )
         # Persist the dominant pre-fit values on the screening result BEFORE
         # writing it to disk, so a later `--screening-results` resume can
@@ -553,9 +643,11 @@ def _run_fit(args, config, config_path):
             prefit_values,
         )
 
-    # Default to all registry parameters if no screening was used
+    # Default to mode-gated pool if no screening was used.
+    # ``"all"`` reproduces the legacy unified pool exactly.
     if active_param_names is None:
-        active_param_names = get_param_names()
+        active_param_names = get_param_names_for_mode(imaging_mode)
+        fixed_params = {}
 
     # Build bounds for active parameters
     bounds_config = opt_config.get("bounds", {})
@@ -596,19 +688,63 @@ def _run_fit(args, config, config_path):
     # Find image pairs
     image_pairs = find_real_images(Path(input_dir), limit=limit)
 
-    # Build the DE init seed from the coarse pre-fit values (if any) so the
-    # main run starts with dominant parameters near their optimum.  The
-    # remaining dimensions fall back to their registry default.
+    # Skip warm-start when a screening result is loaded — that path already
+    # supplies a Morris-derived best vector via ``prefit_values``.  When no
+    # screening result is in play, run a cheap Latin-hypercube random
+    # search over the active pool to seed DE.
+    warmstart_x = None
+    if (
+        warm_start_samples > 0
+        and active_param_names
+        and screening_result is None
+    ):
+        # Hold prefit dominants fixed during the warm-start so the LH
+        # samples concentrate budget on the remaining dims.
+        ws_active = [n for n in active_param_names if n not in prefit_values]
+        ws_bounds = [
+            tuple(bounds_config[n]) if n in bounds_config
+            else PARAMETER_REGISTRY[n].bounds
+            for n in ws_active
+        ]
+        ws_fixed = dict(fixed_params or {})
+        ws_fixed.update(prefit_values)
+        if ws_active:
+            warmstart_x = random_search_warmstart(
+                image_pairs=image_pairs,
+                bounds=ws_bounds,
+                active_param_names=ws_active,
+                weights=weights,
+                region_weights=region_weights,
+                n_samples=warm_start_samples,
+                workers=workers,
+                seed=seed,
+                n_vertices=n_vertices,
+                fixed_params=ws_fixed,
+            )
+
+    # Build the DE init seed from warm-start + prefit dominants (if any).
+    # Dimensions not covered fall back to the registry default, clamped
+    # into the per-dim bounds in case the bounds are narrower than the
+    # default.
     init_seed_x = None
-    if prefit_values:
+    if warmstart_x is not None or prefit_values:
         from .parameter_registry import get_all_defaults
         defaults = get_all_defaults()
+
+        warmstart_lookup: Dict[str, float] = {}
+        if warmstart_x is not None:
+            warmstart_lookup = {
+                n: float(v) for n, v in zip(ws_active, warmstart_x)
+            }
+
         seed_vec = []
         for name, (lo, hi) in zip(active_param_names, bounds):
             if name in prefit_values:
+                # Coarse pre-fit values trump everything else.
                 seed_vec.append(float(prefit_values[name]))
+            elif name in warmstart_lookup:
+                seed_vec.append(float(np.clip(warmstart_lookup[name], lo, hi)))
             else:
-                # Default may be outside narrowed bounds in edge cases.
                 seed_vec.append(float(np.clip(defaults.get(name, (lo + hi) / 2), lo, hi)))
         init_seed_x = np.array(seed_vec, dtype=float)
 
