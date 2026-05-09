@@ -232,19 +232,20 @@ def compute_ms_ssim_with_region_weights(
     image2: np.ndarray,
     w_fg: np.ndarray,
     w_bg: np.ndarray,
+    w_edge: Optional[np.ndarray] = None,
     data_range: float = 1.0,
     weights: np.ndarray = None,
 ) -> Dict[str, float]:
     """Compute true per-region MS-SSIM with the same weight maps as the loss.
 
     Runs the standard MS-SSIM pyramid on the full image AND downsamples
-    the foreground / background weight maps with the same Gaussian +
-    decimation chain so they stay aligned with the per-pixel SSIM map at
-    every scale.  At each scale we compute three scalars (full / fg / bg)
-    via :func:`compute_weighted_scalar`, clamp them to ``[0, 1]`` (mirrors
-    the existing ``max(s, 0)`` clamp in :func:`compute_ms_ssim` so a 0
-    score doesn't NaN the geometric mean), then combine across scales
-    with the Wang-2003 weighted geometric mean.
+    the foreground / background (and optionally edge-band) weight maps
+    with the same Gaussian + decimation chain so they stay aligned with
+    the per-pixel SSIM map at every scale.  At each scale we compute
+    per-region scalars via :func:`compute_weighted_scalar`, clamp them to
+    ``[0, 1]`` (mirrors the existing ``max(s, 0)`` clamp in
+    :func:`compute_ms_ssim` so a 0 score doesn't NaN the geometric mean),
+    then combine across scales with the Wang-2003 weighted geometric mean.
 
     The per-scale "score" approximation matches the existing
     :func:`compute_ms_ssim`: rather than splitting SSIM into separate
@@ -261,12 +262,15 @@ def compute_ms_ssim_with_region_weights(
         image2: Candidate image, same shape as ``image1``.
         w_fg, w_bg: Soft region weight maps from
             :func:`crm_gen.weight_maps.build_region_weight_maps`.
+        w_edge: Optional edge-band weight map.  When supplied, the result
+            also contains ``edge_ms_ssim``.
         data_range: SSIM data range (1.0 for ``[0, 1]`` images).
         weights: Per-scale weights; default Wang-2003 5-scale weights.
 
     Returns:
-        ``{"full_ms_ssim": float, "fg_ms_ssim": float, "bg_ms_ssim": float}``
-        — each in ``[0, 1]``, higher is better.
+        ``{"full_ms_ssim", "fg_ms_ssim", "bg_ms_ssim"}`` — each in
+        ``[0, 1]``, higher is better.  When ``w_edge`` is supplied,
+        ``edge_ms_ssim`` is added.
     """
     from scipy.ndimage import gaussian_filter
 
@@ -278,10 +282,12 @@ def compute_ms_ssim_with_region_weights(
     im2 = _ensure_grayscale(image2).astype(np.float64)
     wfg = w_fg.astype(np.float64)
     wbg = w_bg.astype(np.float64)
+    wed = w_edge.astype(np.float64) if w_edge is not None else None
 
     full_scores = []
     fg_scores = []
     bg_scores = []
+    edge_scores: list = [] if wed is not None else []
 
     for i in range(levels):
         s = ssim(im1, im2, data_range=data_range, full=True)
@@ -294,18 +300,24 @@ def compute_ms_ssim_with_region_weights(
         full_scores.append(max(float(s_val), 0.0))
         fg_scores.append(max(compute_weighted_scalar(s_map, wfg), 0.0))
         bg_scores.append(max(compute_weighted_scalar(s_map, wbg), 0.0))
+        if wed is not None:
+            edge_scores.append(max(compute_weighted_scalar(s_map, wed), 0.0))
 
         if i < levels - 1:
             im1 = gaussian_filter(im1, sigma=1.0)[::2, ::2]
             im2 = gaussian_filter(im2, sigma=1.0)[::2, ::2]
             wfg = gaussian_filter(wfg, sigma=1.0)[::2, ::2]
             wbg = gaussian_filter(wbg, sigma=1.0)[::2, ::2]
+            if wed is not None:
+                wed = gaussian_filter(wed, sigma=1.0)[::2, ::2]
             if min(im1.shape) < 11:
                 # Pad remaining scales with the most recent per-region scalars.
                 for _ in range(i + 1, levels):
                     full_scores.append(full_scores[-1])
                     fg_scores.append(fg_scores[-1])
                     bg_scores.append(bg_scores[-1])
+                    if wed is not None:
+                        edge_scores.append(edge_scores[-1])
                 break
 
     w = np.asarray(weights, dtype=np.float64)
@@ -313,11 +325,14 @@ def compute_ms_ssim_with_region_weights(
     fg_ms = float(np.prod(np.array(fg_scores[: levels]) ** w))
     bg_ms = float(np.prod(np.array(bg_scores[: levels]) ** w))
 
-    return {
+    out = {
         "full_ms_ssim": full_ms,
         "fg_ms_ssim": fg_ms,
         "bg_ms_ssim": bg_ms,
     }
+    if w_edge is not None:
+        out["edge_ms_ssim"] = float(np.prod(np.array(edge_scores[: levels]) ** w))
+    return out
 
 
 def compute_gradient_ssim(
@@ -622,6 +637,7 @@ def compute_all_metrics_with_weights(
     synthetic: np.ndarray,
     w_fg: np.ndarray,
     w_bg: np.ndarray,
+    w_edge: Optional[np.ndarray] = None,
     bins: int = 256,
     include_ms_ssim: bool = False,
     include_gradient_ssim: bool = False,
@@ -632,8 +648,8 @@ def compute_all_metrics_with_weights(
 
     Runs SSIM / MS-SSIM / gradient-SSIM **once** on the unmodified full
     image (no zero-masking, so no fake cliffs at cell boundaries), then
-    derives foreground and background scores from the per-pixel maps
-    weighted by ``w_fg`` and ``w_bg``.
+    derives per-region scores from the per-pixel maps weighted by
+    ``w_fg``, ``w_bg``, and (optionally) ``w_edge``.
 
     Histogram distance, PSNR, LPIPS, and power spectrum are computed
     once on the full image and placed in the ``full`` summary only:
@@ -647,7 +663,7 @@ def compute_all_metrics_with_weights(
 
     SSIM, MS-SSIM, and gradient-SSIM ARE region-partitioned: each is
     computed once with ``return_full=True`` to produce a per-pixel map,
-    then aggregated against ``w_fg`` and ``w_bg`` to produce the fg / bg
+    then aggregated against the supplied weight maps to produce per-region
     scores.  MS-SSIM uses :func:`compute_ms_ssim_with_region_weights`
     which downsamples the weight maps in lockstep with the image pyramid.
 
@@ -656,6 +672,11 @@ def compute_all_metrics_with_weights(
         synthetic: Synthetic image, same shape as ``original``.
         w_fg, w_bg: Soft region weight maps from
             :func:`crm_gen.weight_maps.build_region_weight_maps`.
+        w_edge: Optional edge-band weight map.  When supplied, the
+            returned dict also contains an ``"edge"`` bucket with the
+            same per-metric structure as ``"fg"`` / ``"bg"``.  Useful for
+            small spatially-localised features (edge fringe, halo
+            transition) that global metrics under-weight.
         bins: Histogram bin count.
         include_ms_ssim, include_gradient_ssim, include_power_spectrum,
         include_lpips: Opt-in flags for the corresponding metrics.
@@ -663,7 +684,8 @@ def compute_all_metrics_with_weights(
     Returns:
         ``{"full": {...}, "fg": {...}, "bg": {...}}`` — each inner dict is
         a ``summary``-style flat mapping of metric-name → score, directly
-        consumable by ``compute_weighted_loss``.
+        consumable by ``compute_weighted_loss``.  When ``w_edge`` is
+        supplied, an ``"edge"`` bucket is added.
     """
     original = _ensure_grayscale(original)
     synthetic = _ensure_grayscale(synthetic)
@@ -675,6 +697,10 @@ def compute_all_metrics_with_weights(
     if original.shape != w_fg.shape or original.shape != w_bg.shape:
         raise ValueError(
             f"Weight-map shape {w_fg.shape} doesn't match image {original.shape}"
+        )
+    if w_edge is not None and original.shape != w_edge.shape:
+        raise ValueError(
+            f"Edge weight-map shape {w_edge.shape} doesn't match image {original.shape}"
         )
 
     color_dist = compute_color_distribution(original, synthetic, bins=bins)
@@ -691,12 +717,19 @@ def compute_all_metrics_with_weights(
     }
     fg = {"ssim_score": compute_weighted_scalar(ssim_map, w_fg)}
     bg = {"ssim_score": compute_weighted_scalar(ssim_map, w_bg)}
+    edge: Optional[Dict[str, float]] = None
+    if w_edge is not None:
+        edge = {"ssim_score": compute_weighted_scalar(ssim_map, w_edge)}
 
     if include_ms_ssim:
-        ms = compute_ms_ssim_with_region_weights(original, synthetic, w_fg, w_bg)
+        ms = compute_ms_ssim_with_region_weights(
+            original, synthetic, w_fg, w_bg, w_edge=w_edge
+        )
         full["ms_ssim_score"] = ms["full_ms_ssim"]
         fg["ms_ssim_score"] = ms["fg_ms_ssim"]
         bg["ms_ssim_score"] = ms["bg_ms_ssim"]
+        if edge is not None:
+            edge["ms_ssim_score"] = ms["edge_ms_ssim"]
 
     if include_gradient_ssim:
         g = compute_gradient_ssim(original, synthetic, return_full=True)
@@ -704,9 +737,13 @@ def compute_all_metrics_with_weights(
         if "ssim_map" in g:
             fg["gradient_ssim_score"] = compute_weighted_scalar(g["ssim_map"], w_fg)
             bg["gradient_ssim_score"] = compute_weighted_scalar(g["ssim_map"], w_bg)
+            if edge is not None:
+                edge["gradient_ssim_score"] = compute_weighted_scalar(g["ssim_map"], w_edge)
         else:
             fg["gradient_ssim_score"] = g["ssim"]
             bg["gradient_ssim_score"] = g["ssim"]
+            if edge is not None:
+                edge["gradient_ssim_score"] = g["ssim"]
 
     if include_power_spectrum:
         # Power spectrum is translation-invariant and inherently global; place
@@ -722,7 +759,10 @@ def compute_all_metrics_with_weights(
         # that isn't double-counted via the fg/bg region weights.
         full["lpips_distance"] = lp
 
-    return {"full": full, "fg": fg, "bg": bg}
+    result = {"full": full, "fg": fg, "bg": bg}
+    if edge is not None:
+        result["edge"] = edge
+    return result
 
 
 def save_metrics_json(metrics: Dict, output_path: Path) -> None:
