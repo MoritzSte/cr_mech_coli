@@ -3,6 +3,14 @@
 # Controls the optimisation hyperparameters for `crm_gen fit`.
 # The input directory of real microscope images is passed as a CLI argument.
 
+# Microscopy mode used to gate the parameter pool.  One of:
+#   "fluorescence"   — drops halo + absorption + edge_fringe filters
+#   "phase_contrast" — drops absorption + edge_fringe (keeps halo)
+#   "brightfield"    — drops halo (keeps absorption + edge_fringe)
+#   "all"            — legacy unified pool (every parameter is in scope)
+# Overridable on the CLI via `--mode`.
+imaging_mode = "all"
+
 [optimization]
 output_dir = ""                         # Output directory (empty = ./fit_results_<timestamp>)
 limit = 0                               # Maximum number of images to use (0 = all)
@@ -16,6 +24,13 @@ resume_dir = ""                         # Directory of previous run to resume (r
 no_checkpoint = false                   # Disable checkpointing
 save_all_synthetics = true              # Generate synthetic images for all pairs after optimisation
 
+# Latin-hypercube random-search warm-start budget (cheap replacement for
+# Morris's `best_idx`).  Runs before DE on the active mode-gated pool and
+# seeds the DE init population.  0 disables.  Skipped when a screening
+# JSON is supplied via `--screening-results` (that path supplies its own
+# warm-start vector).
+warm_start_samples = 200
+
 [optimization.metric_weights]
 histogram_distance = 0.01               # Weight for histogram L1 distance
 ssim = 1.0                              # Weight for SSIM (structural similarity)
@@ -25,36 +40,51 @@ lpips = 1.0                             # Weight for LPIPS perceptual distance (
 power_spectrum = 0.0                    # Weight for power spectrum distance (0 = disabled)
 
 [optimization.region_weights]
-# Soft foreground/background weight maps are built from the segmentation mask
-# via a Gaussian falloff (scipy distance transform).  `foreground_sigma_px` is
-# the pixel scale of the falloff — larger values extend the foreground's
+# Soft foreground/background/edge weight maps are built from the segmentation
+# mask via a Gaussian falloff (scipy distance transform).  `foreground_sigma_px`
+# is the pixel scale of the falloff — larger values extend the foreground's
 # sphere of influence further into the halo/fringe zone.  Typical 20-60 px.
-background = 0.5                        # Weight for background region loss
-foreground = 0.5                        # Weight for foreground region loss
+#
+# `edge_band` and `edge_sigma_px` add a third weight map that peaks on the cell
+# boundary itself.  This gives small spatially-localised effects (edge fringe,
+# halo transition) dedicated signal in the loss — global SSIM / LPIPS cannot
+# resolve features that live in only a 1-3 px boundary band.
+#
+# Recommended brightfield setting (rebalances bg+fg to make room for edge):
+#     background = 0.4
+#     foreground = 0.4
+#     edge_band  = 0.2
+#     edge_sigma_px = 2.0
+#
+# Default below preserves legacy two-region behaviour (edge_band = 0).
+background = 0.4                        # Weight for background region loss
+foreground = 0.4                        # Weight for foreground region loss
 foreground_sigma_px = 30.0              # Soft falloff scale (pixels) for the foreground weight map
+edge_band = 0.2                         # Weight for the boundary-band region loss (0 = disabled)
+edge_sigma_px = 2.0                     # Boundary-band falloff scale (pixels). Typical 1-4 px.
 
 [optimization.bounds]
 # Search bounds [min, max] for each imaging parameter during optimization.
 # These define the space explored by differential evolution.
 # Parameters not listed here fall back to registry defaults.
 
-# bg_base_brightness      = [0.0,   0.6  ]   # Background base brightness
-# bg_gradient_strength    = [0.0,   0.04 ]   # Illumination gradient intensity
-# bg_noise_scale          = [1,     25   ]   # Background illumination noise scale
-# texture_strength        = [0.0,   0.1  ]   # Fine texture strength
-# texture_scale           = [0.5,   5.0  ]   # Texture smoothness
-# bg_blur_sigma           = [0.1,   3.0  ]   # Background blur sigma
-# dark_spot_intensity     = [0.0,   0.3  ]   # Dark spot intensity
-# num_dark_spots_max      = [0,     20   ]   # Maximum dark spots
-# bac_halo_intensity      = [0.0,   0.6  ]   # Halo intensity around bacteria
-# halo_inner_width        = [0.5,   5.0  ]   # Inner halo width (pixels)
-# halo_outer_width        = [5.0,   100.0]   # Outer halo width (pixels)
-# halo_blur_sigma         = [0.1,   3.0  ]   # Halo blur sigma
-# psf_sigma               = [0.1,   3.0  ]   # Point Spread Function blur sigma
-# psf_size                = [5,     21   ]   # PSF kernel size (odd integer)
-# peak_signal             = [500,   10000]   # Peak photon count (Poisson noise)
-# gaussian_sigma          = [0.001, 0.05 ]   # Gaussian readout noise sigma
-# brightness_noise_strength = [0.0, 0.5  ]   # Intra-cell brightness variation
+# bg_base_brightness        = [0.0,   0.6  ]   # Background base brightness
+# bg_gradient_strength      = [0.0,   0.04 ]   # Illumination gradient intensity
+# bg_noise_scale            = [1,     25   ]   # Background illumination noise scale
+# texture_strength          = [0.0,   0.1  ]   # Fine texture strength
+# texture_scale             = [0.5,   5.0  ]   # Texture smoothness
+# bg_blur_sigma             = [0.1,   3.0  ]   # Background blur sigma
+# dark_spot_intensity       = [0.0,   0.3  ]   # Dark spot intensity
+# num_dark_spots_max        = [0,     20   ]   # Maximum dark spots
+# bac_halo_intensity        = [0.0,   0.6  ]   # Halo intensity around bacteria
+# halo_inner_width          = [0.5,   5.0  ]   # Inner halo width (pixels)
+# halo_outer_width          = [5.0,   100.0]   # Outer halo width (pixels)
+# halo_blur_sigma           = [0.1,   3.0  ]   # Halo blur sigma
+# psf_sigma                 = [0.1,   3.0  ]   # Point Spread Function blur sigma
+# psf_size                  = [5,     21   ]   # PSF kernel size (odd integer)
+# peak_signal               = [500,   10000]   # Peak photon count (Poisson noise)
+# gaussian_sigma            = [0.001, 0.05 ]   # Gaussian readout noise sigma
+# brightness_noise_strength = [0.0, 0.5    ]   # Intra-cell brightness variation
 # absorption_coeff          = [0.0,   2.0  ]   # Beer-Lambert absorption coefficient
 # cell_optical_thickness    = [0.5,   10.0 ]   # Maximum optical thickness at cell center
 # defocus_strength          = [0.0,   3.0  ]   # Defocus blur strength (extra sigma)
