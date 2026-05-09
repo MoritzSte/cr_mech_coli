@@ -17,12 +17,23 @@ To add a new parameter (e.g. for a new imaging modality):
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
+
+
+ImagingMode = Literal["fluorescence", "phase_contrast", "brightfield", "all"]
+VALID_IMAGING_MODES: Tuple[str, ...] = ("fluorescence", "phase_contrast", "brightfield", "all")
 
 
 @dataclass(frozen=True)
 class ParameterDef:
-    """Definition of a single tunable parameter."""
+    """Definition of a single tunable parameter.
+
+    ``applies_to`` is the tuple of microscopy modes the parameter is
+    relevant for.  Empty (the default) means the parameter applies to every
+    mode (universal optics / sensor / background).  Mode-specific filters
+    (halo for phase contrast, absorption + edge_fringe for brightfield)
+    name only their target mode(s).  See :data:`ImagingMode`.
+    """
 
     name: str
     group: str
@@ -31,6 +42,7 @@ class ParameterDef:
     default: Any
     off_value: Optional[float] = None
     dtype: str = "float"  # "float", "int", or "int_odd"
+    applies_to: Tuple[str, ...] = ()  # () = applies to every mode
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +115,7 @@ PARAMETER_REGISTRY: Dict[str, ParameterDef] = {
         off_value=0,
         dtype="int",
     ),
-    # ── Halo ──────────────────────────────────────────────────────────────
+    # ── Halo (phase-contrast artefact) ────────────────────────────────────
     "bac_halo_intensity": ParameterDef(
         name="bac_halo_intensity",
         group="halo",
@@ -111,6 +123,7 @@ PARAMETER_REGISTRY: Dict[str, ParameterDef] = {
         bounds=(0.0, 0.6),
         default=0.0,
         off_value=0.0,
+        applies_to=("phase_contrast",),
     ),
     "halo_inner_width": ParameterDef(
         name="halo_inner_width",
@@ -118,6 +131,7 @@ PARAMETER_REGISTRY: Dict[str, ParameterDef] = {
         description="Width of inner bright halo in pixels",
         bounds=(0.5, 5.0),
         default=2.0,
+        applies_to=("phase_contrast",),
     ),
     "halo_outer_width": ParameterDef(
         name="halo_outer_width",
@@ -125,6 +139,7 @@ PARAMETER_REGISTRY: Dict[str, ParameterDef] = {
         description="Total halo extent in pixels",
         bounds=(5.0, 100.0),
         default=50.0,
+        applies_to=("phase_contrast",),
     ),
     "halo_blur_sigma": ParameterDef(
         name="halo_blur_sigma",
@@ -132,6 +147,7 @@ PARAMETER_REGISTRY: Dict[str, ParameterDef] = {
         description="Gaussian blur sigma for halo transition smoothing",
         bounds=(0.1, 3.0),
         default=0.5,
+        applies_to=("phase_contrast",),
     ),
     # ── PSF ───────────────────────────────────────────────────────────────
     "psf_sigma": ParameterDef(
@@ -182,6 +198,7 @@ PARAMETER_REGISTRY: Dict[str, ParameterDef] = {
         bounds=(0.0, 2.0),
         default=0.0,
         off_value=0.0,
+        applies_to=("brightfield",),
     ),
     "cell_optical_thickness": ParameterDef(
         name="cell_optical_thickness",
@@ -189,6 +206,7 @@ PARAMETER_REGISTRY: Dict[str, ParameterDef] = {
         description="Maximum optical thickness at cell center (pixels)",
         bounds=(0.5, 10.0),
         default=3.0,
+        applies_to=("brightfield",),
     ),
     # ── Defocus (depth-of-field blur) ─────────────────────────────────────
     "defocus_strength": ParameterDef(
@@ -224,6 +242,7 @@ PARAMETER_REGISTRY: Dict[str, ParameterDef] = {
         bounds=(0.0, 0.1),
         default=0.0,
         off_value=0.0,
+        applies_to=("brightfield",),
     ),
     "edge_fringe_width": ParameterDef(
         name="edge_fringe_width",
@@ -231,6 +250,7 @@ PARAMETER_REGISTRY: Dict[str, ParameterDef] = {
         description="Width of edge diffraction fringe in pixels",
         bounds=(0.5, 4.0),
         default=1.5,
+        applies_to=("brightfield",),
     ),
 }
 
@@ -240,9 +260,54 @@ PARAMETER_REGISTRY: Dict[str, ParameterDef] = {
 # ---------------------------------------------------------------------------
 
 
+def applies_to_mode(pdef: ParameterDef, mode: str) -> bool:
+    """Return True if ``pdef`` applies to ``mode``.
+
+    A parameter applies to a mode if its ``applies_to`` is empty
+    (universal) OR ``mode`` is in ``applies_to``.  ``mode == "all"``
+    matches every parameter — used for the legacy unified pool.
+    """
+    if mode == "all" or not pdef.applies_to:
+        return True
+    return mode in pdef.applies_to
+
+
+def _validate_mode(mode: str) -> None:
+    if mode not in VALID_IMAGING_MODES:
+        raise ValueError(
+            f"Unknown imaging mode {mode!r}. "
+            f"Expected one of: {VALID_IMAGING_MODES}"
+        )
+
+
 def get_param_names() -> List[str]:
     """Return ordered list of all parameter names."""
     return list(PARAMETER_REGISTRY.keys())
+
+
+def get_param_names_for_mode(mode: str) -> List[str]:
+    """Return ordered parameter names that apply to ``mode``.
+
+    ``mode == "all"`` returns the full registry (legacy unified pool).
+    """
+    _validate_mode(mode)
+    return [n for n, p in PARAMETER_REGISTRY.items() if applies_to_mode(p, mode)]
+
+
+def get_bounds_for_mode(mode: str) -> List[Tuple[float, float]]:
+    """Return bounds for parameters applicable to ``mode``."""
+    _validate_mode(mode)
+    return [p.bounds for p in PARAMETER_REGISTRY.values() if applies_to_mode(p, mode)]
+
+
+def get_groups_for_mode(mode: str) -> List[str]:
+    """Return the unique groups (in registry order) applicable to ``mode``."""
+    _validate_mode(mode)
+    seen: List[str] = []
+    for p in PARAMETER_REGISTRY.values():
+        if applies_to_mode(p, mode) and p.group not in seen:
+            seen.append(p.group)
+    return seen
 
 
 def get_all_bounds() -> List[Tuple[float, float]]:
