@@ -285,13 +285,24 @@ def evaluate_single_pair(
     sigma_px = float(
         region_weights.get("foreground_sigma_px", DEFAULT_REGION_WEIGHTS["foreground_sigma_px"])
     )
-    w_fg, w_bg = build_region_weight_maps(original_mask, sigma_px=sigma_px)
+    edge_band_weight = float(region_weights.get("edge_band", 0.0))
+    if edge_band_weight > 0:
+        edge_sigma_px = float(
+            region_weights.get("edge_sigma_px", DEFAULT_REGION_WEIGHTS["edge_sigma_px"])
+        )
+        w_fg, w_bg, w_edge = build_region_weight_maps(
+            original_mask, sigma_px=sigma_px, edge_sigma_px=edge_sigma_px
+        )
+    else:
+        w_fg, w_bg = build_region_weight_maps(original_mask, sigma_px=sigma_px)
+        w_edge = None
 
     metrics_regions = compute_all_metrics_with_weights(
         real_img,
         synthetic_img,
         w_fg=w_fg,
         w_bg=w_bg,
+        w_edge=w_edge,
         include_ms_ssim=include_ms_ssim,
         include_gradient_ssim=include_gradient_ssim,
         include_power_spectrum=include_power_spectrum,
@@ -470,14 +481,17 @@ def compute_weighted_loss(
     Accepts the output of
     :func:`crm_gen.metrics.compute_all_metrics_with_weights` — a dict with
     ``"full"``, ``"fg"`` and ``"bg"`` entries, each a flat summary mapping
-    metric-name → score.
+    metric-name → score.  An optional ``"edge"`` bucket is mixed in when
+    present and ``region_weights["edge_band"] > 0``; this gives small
+    spatially-localised features (edge fringe, halo transition) dedicated
+    pressure in the loss.
 
     Region-split (SSIM / MS-SSIM / gradient-SSIM) terms are mixed per
-    ``region_weights["background"]`` and ``region_weights["foreground"]``.
-    Global-only terms (histogram distance, LPIPS, power spectrum) are
-    taken from the ``"full"`` bucket and added without region mixing —
-    they're defined over the whole image and would be double-counted via
-    the region mixer.
+    ``region_weights["background"]``, ``["foreground"]``, and
+    ``["edge_band"]``.  Global-only terms (histogram distance, LPIPS,
+    power spectrum) are taken from the ``"full"`` bucket and added without
+    region mixing — they're defined over the whole image and would be
+    double-counted via the region mixer.
 
     Note: this signature replaced the older
     ``(metrics, weights, metrics_bg=, metrics_fg=, region_weights=)`` form
@@ -485,9 +499,11 @@ def compute_weighted_loss(
     pass the dict produced by ``compute_all_metrics_with_weights``.
 
     Args:
-        metrics_regions: Dict with keys ``full`` / ``fg`` / ``bg``.
+        metrics_regions: Dict with keys ``full`` / ``fg`` / ``bg``,
+            optionally ``edge``.
         weights: Metric-name → weight.
-        region_weights: ``background`` + ``foreground`` mixing weights.
+        region_weights: ``background`` / ``foreground`` / optional
+            ``edge_band`` mixing weights.
 
     Returns:
         Weighted loss (lower is better).
@@ -513,6 +529,14 @@ def compute_weighted_loss(
         region_weights["background"] * per_region_loss(bg_summary)
         + region_weights["foreground"] * per_region_loss(fg_summary)
     )
+
+    # Edge-band term: only mixed in when both the metric was computed and
+    # the user assigned non-zero weight.  Either being absent makes the
+    # contribution zero — preserving backward compatibility for configs
+    # that pre-date the edge-band addition.
+    edge_band_weight = float(region_weights.get("edge_band", 0.0))
+    if edge_band_weight > 0 and "edge" in metrics_regions:
+        total += edge_band_weight * per_region_loss(metrics_regions["edge"])
 
     # Global-only terms (not region-partitioned).
     if "histogram_distance" in full_summary:
@@ -890,6 +914,11 @@ def compute_final_metrics(
     sigma_px = float(region_weights.get(
         "foreground_sigma_px", DEFAULT_REGION_WEIGHTS["foreground_sigma_px"]
     ))
+    edge_band_weight = float(region_weights.get("edge_band", 0.0))
+    edge_sigma_px = float(region_weights.get(
+        "edge_sigma_px", DEFAULT_REGION_WEIGHTS["edge_sigma_px"]
+    ))
+    use_edge = edge_band_weight > 0
 
     per_image_metrics = []
     synth_cache = {}
@@ -912,13 +941,20 @@ def compute_final_metrics(
         real_img = load_image(real_img_path)
         original_mask = tiff.imread(mask_path)
 
-        w_fg, w_bg = build_region_weight_maps(original_mask, sigma_px=sigma_px)
+        if use_edge:
+            w_fg, w_bg, w_edge = build_region_weight_maps(
+                original_mask, sigma_px=sigma_px, edge_sigma_px=edge_sigma_px
+            )
+        else:
+            w_fg, w_bg = build_region_weight_maps(original_mask, sigma_px=sigma_px)
+            w_edge = None
 
         regions = compute_all_metrics_with_weights(
             real_img,
             synthetic_img,
             w_fg=w_fg,
             w_bg=w_bg,
+            w_edge=w_edge,
             include_ms_ssim=include_ms_ssim,
             include_gradient_ssim=include_gradient_ssim,
             include_power_spectrum=include_power_spectrum,
@@ -928,6 +964,7 @@ def compute_final_metrics(
         full = regions["full"]
         fg = regions["fg"]
         bg = regions["bg"]
+        edge = regions.get("edge")
 
         entry = {
             "image_name": real_img_path.name,
@@ -939,14 +976,20 @@ def compute_final_metrics(
             "fg_ssim_score": fg["ssim_score"],
             "bg_ssim_score": bg["ssim_score"],
         }
+        if edge is not None:
+            entry["edge_ssim_score"] = edge["ssim_score"]
         if include_ms_ssim:
             entry["full_ms_ssim"] = full["ms_ssim_score"]
             entry["fg_ms_ssim"] = fg["ms_ssim_score"]
             entry["bg_ms_ssim"] = bg["ms_ssim_score"]
+            if edge is not None:
+                entry["edge_ms_ssim"] = edge["ms_ssim_score"]
         if include_gradient_ssim:
             entry["full_gradient_ssim_score"] = full["gradient_ssim_score"]
             entry["fg_gradient_ssim_score"] = fg["gradient_ssim_score"]
             entry["bg_gradient_ssim_score"] = bg["gradient_ssim_score"]
+            if edge is not None:
+                entry["edge_gradient_ssim_score"] = edge["gradient_ssim_score"]
         if include_power_spectrum:
             entry["full_power_spectrum"] = full["power_spectrum_distance"]
         if include_lpips:
@@ -1156,3 +1199,123 @@ def coarse_prefit(
     print("=" * 80 + "\n")
 
     return best_values
+
+
+# ============================================================================
+# Random-search warm-start (cheap replacement for Morris+Sobol's best-idx)
+# ============================================================================
+
+
+def random_search_warmstart(
+    image_pairs: List[Tuple[Path, Path]],
+    bounds: List[Tuple[float, float]],
+    active_param_names: List[str],
+    weights: Dict,
+    region_weights: Dict,
+    n_samples: int = 200,
+    workers: int = -1,
+    seed: int = 42,
+    n_vertices: int = 8,
+    fixed_params: Optional[Dict] = None,
+) -> np.ndarray:
+    """Latin-hypercube random search; returns the best parameter vector found.
+
+    Plays the same warm-start role that Morris's ``best_idx`` did before
+    we dropped Morris+Sobol from the default fit pipeline.  Significantly
+    cheaper: ~``n_samples × len(image_pairs)`` evaluations vs. the
+    13k+164k of full Morris+Sobol screening.
+
+    Args:
+        image_pairs: ``(real, mask)`` pairs evaluated for each sample.
+        bounds: Parameter bounds, in the order of ``active_param_names``.
+        active_param_names: Parameter names being warm-started.
+        weights: Metric weights (same schema as ``optimize_parameters``).
+        region_weights: Region weights (same schema as
+            ``optimize_parameters``).
+        n_samples: Number of Latin-hypercube samples.  200 is a good
+            default; 100 is a fast lower bound, 300+ for higher-dim pools.
+            ``0`` skips the warm-start (return value: ``None``).
+        workers: Worker count.  ``-1`` uses every available CPU; ``1`` is
+            sequential.
+        seed: Random seed for reproducible Latin-hypercube sampling.
+        n_vertices: Vertices per cell; forwarded to scene generation.
+        fixed_params: Values for parameters not in ``active_param_names``.
+
+    Returns:
+        1-D array of length ``len(active_param_names)`` containing the
+        best parameter vector.  Suitable as ``init_seed_x`` for
+        :func:`optimize_parameters`.
+    """
+    if n_samples <= 0:
+        return None
+
+    from scipy.stats import qmc
+    import multiprocessing as _mp
+    from concurrent.futures import ProcessPoolExecutor as _PPE
+
+    n_dims = len(bounds)
+    lo = np.array([b[0] for b in bounds], dtype=float)
+    hi = np.array([b[1] for b in bounds], dtype=float)
+
+    sampler = qmc.LatinHypercube(d=n_dims, seed=seed)
+    unit = sampler.random(n=n_samples)
+    X = lo + unit * (hi - lo)
+
+    print("\n" + "=" * 60)
+    print("RANDOM-SEARCH WARM-START")
+    print("=" * 60)
+    print(f"Active parameters: {n_dims}")
+    print(f"Samples: {n_samples}")
+    print(f"Images per sample: {len(image_pairs)}")
+    print("=" * 60)
+
+    temp_base_dir = tempfile.mkdtemp(prefix="warmstart_temp_")
+    try:
+        objective = ObjectiveFunction(
+            image_pairs=image_pairs,
+            weights=weights,
+            temp_base_dir=temp_base_dir,
+            n_vertices=n_vertices,
+            region_weights=region_weights,
+            active_param_names=active_param_names,
+            fixed_params=fixed_params or {},
+        )
+
+        if workers == 1:
+            Y = np.zeros(n_samples)
+            for i in tqdm(range(n_samples), desc="Warm-start"):
+                Y[i] = objective(X[i])
+        else:
+            available = (
+                len(os.sched_getaffinity(0))
+                if hasattr(os, "sched_getaffinity")
+                else _mp.cpu_count()
+            )
+            n_workers = available if workers == -1 else workers
+            ctx = _mp.get_context("spawn")
+            rows = [X[i] for i in range(n_samples)]
+            with _PPE(max_workers=n_workers, mp_context=ctx) as pool:
+                Y = np.array(
+                    list(
+                        tqdm(
+                            pool.map(objective, rows, chunksize=4),
+                            total=n_samples,
+                            desc="Warm-start",
+                        )
+                    )
+                )
+
+        best_idx = int(np.argmin(Y))
+        best_x = X[best_idx].copy()
+        best_loss = float(Y[best_idx])
+
+        print(f"\nWarm-start best loss: {best_loss:.6f}")
+        print("Best parameters:")
+        for name, val in zip(active_param_names, best_x):
+            print(f"  {name}: {val:.6g}")
+        print("=" * 60 + "\n")
+
+        return best_x
+    finally:
+        if Path(temp_base_dir).exists():
+            shutil.rmtree(temp_base_dir, ignore_errors=True)
