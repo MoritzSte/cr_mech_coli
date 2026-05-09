@@ -28,6 +28,21 @@ from .metrics import (
 from .parameter_registry import PARAMETER_REGISTRY
 
 
+def _to_grayscale(image):
+    """Collapse RGB images to grayscale; pass 2-D arrays through unchanged.
+
+    The synthetic generator returns ``(H, W, 3)`` RGB images while real
+    brightfield TIFFs typically load as ``(H, W)`` grayscale.  Per-region
+    metrics (PSNR, histogram) require matching shapes, so normalise both
+    to grayscale before regional extraction.  Uses an unweighted channel
+    mean — appropriate for microscopy where channels are usually
+    identical or near-identical.
+    """
+    if image.ndim == 3 and image.shape[-1] == 3:
+        return image.mean(axis=-1)
+    return image
+
+
 def _extract_masked_region(image, mask, region):
     """Zero out pixels outside ``region`` for histogram-style display only.
 
@@ -210,13 +225,20 @@ def generate_detailed_plots(
         real_img = load_image(real_img_path)
         original_mask = tiff.imread(mask_path)
 
-        real_fg = _extract_masked_region(real_img, original_mask, "foreground")
-        real_bg = _extract_masked_region(real_img, original_mask, "background")
+        # Brightfield TIFFs typically load as 2-D grayscale; the synthetic
+        # generator returns (H, W, 3) RGB.  Per-region metrics (PSNR /
+        # histogram) require matching shapes, so collapse both to grayscale
+        # before extraction.  Display panels also expect grayscale.
+        real_img_gray = _to_grayscale(real_img)
+        synthetic_img_gray = _to_grayscale(synthetic_img)
+
+        real_fg = _extract_masked_region(real_img_gray, original_mask, "foreground")
+        real_bg = _extract_masked_region(real_img_gray, original_mask, "background")
         synth_fg = _extract_masked_region(
-            synthetic_img, synthetic_mask, "foreground"
+            synthetic_img_gray, synthetic_mask, "foreground"
         )
         synth_bg = _extract_masked_region(
-            synthetic_img, synthetic_mask, "background"
+            synthetic_img_gray, synthetic_mask, "background"
         )
 
         img_metrics = metrics_lookup[real_img_path.name]
@@ -227,8 +249,8 @@ def generate_detailed_plots(
         ax_full = fig.add_subplot(gs[0, 0])
         _create_histogram_subplot(
             ax_full,
-            real_img,
-            synthetic_img,
+            real_img_gray,
+            synthetic_img_gray,
             "Full Image",
             img_metrics["full_histogram_distance"],
             img_metrics["full_ssim_score"],
@@ -275,14 +297,8 @@ def generate_detailed_plots(
         )
 
         ax_images = fig.add_subplot(gs[1, 1])
-        real_display = (
-            real_img if len(real_img.shape) == 2 else np.mean(real_img, axis=2)
-        )
-        synth_display = (
-            synthetic_img
-            if len(synthetic_img.shape) == 2
-            else np.mean(synthetic_img, axis=2)
-        )
+        real_display = real_img_gray
+        synth_display = synthetic_img_gray
         combined = np.hstack([real_display, synth_display])
         ax_images.imshow(combined, cmap="gray", vmin=0, vmax=1)
         ax_images.set_title("Image Comparison", fontsize=10, fontweight="bold")
