@@ -10,7 +10,20 @@ import tomllib
 from .parameter_registry import (
     get_param_names,
     get_all_bounds,
+    ImagingMode,
+    VALID_IMAGING_MODES,
 )
+
+__all__ = [
+    "load_config",
+    "PARAM_NAMES",
+    "DEFAULT_OPTIMIZATION_BOUNDS",
+    "DEFAULT_METRIC_WEIGHTS",
+    "DEFAULT_REGION_WEIGHTS",
+    "DEFAULT_IMAGING_MODE",
+    "ImagingMode",
+    "VALID_IMAGING_MODES",
+]
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
@@ -45,7 +58,21 @@ DEFAULT_METRIC_WEIGHTS = {
 }
 
 DEFAULT_REGION_WEIGHTS = {
+    # Background / foreground sum to 1 — the legacy two-region split.
     "background": 0.5,
     "foreground": 0.5,
     "foreground_sigma_px": 30.0,
+    # Edge band: a thin Gaussian on the cell boundary that gives small
+    # spatially-localised effects (edge fringe, halo, absorption transition)
+    # dedicated signal in the loss.  Default 0.0 preserves backward compat
+    # for existing TOMLs that don't mention it.  The recommended setting
+    # for brightfield calibration is ``edge_band = 0.2`` with the bg / fg
+    # weights rebalanced to ``0.4`` each so the three regions sum to 1.
+    "edge_band": 0.0,
+    "edge_sigma_px": 2.0,
 }
+
+# Default microscopy mode for fit / screening when neither the TOML
+# config nor the CLI specifies one.  ``"all"`` reproduces the legacy
+# unified-pool behaviour (every parameter is in scope).
+DEFAULT_IMAGING_MODE: str = "all"
