@@ -691,12 +691,15 @@ def _run_fit(args, config, config_path):
     # Skip warm-start when a screening result is loaded — that path already
     # supplies a Morris-derived best vector via ``prefit_values``.  When no
     # screening result is in play, run a cheap Latin-hypercube random
-    # search over the active pool to seed DE.
+    # search over the active pool to seed DE. Also skip on resume: the
+    # checkpoint already carries a valid population, so the seed would be
+    # discarded by ``optimize_parameters`` anyway.
     warmstart_x = None
     if (
         warm_start_samples > 0
         and active_param_names
         and screening_result is None
+        and not resume
     ):
         # Hold prefit dominants fixed during the warm-start so the LH
         # samples concentrate budget on the remaining dims.
