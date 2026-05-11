@@ -123,7 +123,7 @@ def __create_cell_surfaces(
             )
             meshes.append(cylinder)
         # Combine all together
-        mesh = pv.MultiBlock(meshes).extract_surface(algorithm=None)
+        mesh = pv.MultiBlock(meshes).combine().extract_surface()
         yield (ident, mesh)
 
 
