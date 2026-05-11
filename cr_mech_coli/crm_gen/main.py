@@ -486,6 +486,7 @@ def _run_fit(args, config, config_path):
         find_real_images,
         optimize_parameters,
         compute_final_metrics,
+        compute_dataset_stats,
         save_results,
         generate_all_synthetics,
         coarse_prefit,
@@ -778,6 +779,11 @@ def _run_fit(args, config, config_path):
         n_vertices=n_vertices,
         weights=weights,
         region_weights=region_weights,
+    )
+
+    # Aggregate dataset stats (image size, radii, brightness) for downstream reuse
+    results["dataset_stats"] = compute_dataset_stats(
+        image_pairs=image_pairs, n_vertices=n_vertices
     )
 
     # Save results

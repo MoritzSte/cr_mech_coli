@@ -1036,6 +1036,82 @@ def compute_final_metrics(
     return avg_metrics, per_image_metrics, synth_cache
 
 
+def compute_dataset_stats(
+    image_pairs: List[Tuple[Path, Path]], n_vertices: int = 8
+) -> Dict:
+    """Aggregate per-cell radii and brightness across the fit dataset.
+
+    Records image dimensions, cell-radius spread, and cell-brightness spread
+    so they can be referenced later when generating synthetic scenes.
+
+    Args:
+        image_pairs: (image_path, mask_path) tuples used for the fit.
+        n_vertices: Vertex count passed to ``crm.extract_positions``;
+            should match the value used by the optimizer so the radius
+            estimates correspond to the geometry it saw.
+
+    Returns:
+        Dict with ``image_size``, ``radii`` and ``brightness`` summaries.
+    """
+    import cr_mech_coli as crm
+    from .bacteria import extract_original_brightness
+
+    all_radii: List[float] = []
+    all_brightness: List[float] = []
+    image_sizes: List[Tuple[int, int]] = []
+
+    for img_path, mask_path in image_pairs:
+        try:
+            mask = tiff.imread(mask_path)
+            img = tiff.imread(img_path)
+            h, w = mask.shape[:2]
+            image_sizes.append((int(w), int(h)))
+
+            _pos, _len, radii, colors = crm.extract_positions(
+                mask, n_vertices=n_vertices, domain_size=(float(w), float(h))
+            )
+            if len(radii) > 0:
+                all_radii.extend(float(r) for r in radii)
+
+            brightness_map = extract_original_brightness(img, mask, colors)
+            all_brightness.extend(brightness_map.values())
+        except Exception as e:
+            print(f"  Warning: stats extraction failed for {img_path.name}: {e}")
+            continue
+
+    def _summary(values: List[float]) -> Optional[Dict[str, float]]:
+        if not values:
+            return None
+        arr = np.asarray(values, dtype=np.float64)
+        return {
+            "min": float(arr.min()),
+            "max": float(arr.max()),
+            "mean": float(arr.mean()),
+            "median": float(np.median(arr)),
+            "std": float(arr.std()),
+            "n": int(arr.size),
+        }
+
+    stats: Dict = {"n_images": len(image_pairs), "n_vertices": int(n_vertices)}
+
+    if image_sizes:
+        unique_sizes = {tuple(s) for s in image_sizes}
+        if len(unique_sizes) == 1:
+            stats["image_size"] = list(image_sizes[0])
+            stats["image_size_consistent"] = True
+        else:
+            sizes_arr = np.array(image_sizes)
+            stats["image_size_consistent"] = False
+            stats["image_size_min"] = [int(sizes_arr[:, 0].min()), int(sizes_arr[:, 1].min())]
+            stats["image_size_max"] = [int(sizes_arr[:, 0].max()), int(sizes_arr[:, 1].max())]
+
+    stats["radii"] = _summary(all_radii)
+    stats["brightness"] = _summary(all_brightness)
+    stats["brightness_units"] = "0-255 (8-bit equivalent after dtype normalization)"
+
+    return stats
+
+
 def save_results(
     results: Dict, avg_metrics: Dict, per_image_metrics: List[Dict], output_dir: Path
 ):
