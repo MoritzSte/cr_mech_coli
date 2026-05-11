@@ -85,8 +85,11 @@ pub fn generate_agents(
     );
     positions
         .into_iter()
-        .map(|pos| crate::RodAgent {
+        .map(|pos| {
+            let n_v = pos.nrows();
+            crate::RodAgent {
             mechanics: RodMechanics {
+                vel: nalgebra::MatrixXx3::zeros(n_v),
                 pos,
                 ..agent_settings.mechanics.borrow(py).clone().into()
             },
@@ -99,6 +102,7 @@ pub fn generate_agents(
                 .borrow(py)
                 .clone(),
             neighbor_reduction: agent_settings.neighbor_reduction,
+        }
         })
         .collect()
 }
