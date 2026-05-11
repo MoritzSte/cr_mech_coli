@@ -208,6 +208,8 @@ def run_simulation_image_gen(
         config.gel_pressure = float(sim_params['gel_pressure'])
     if 'surface_friction' in sim_params:
         config.surface_friction = float(sim_params['surface_friction'])
+    if 'domain_height' in sim_params:
+        config.domain_height = float(sim_params['domain_height'])
 
     # Build AgentSettings kwargs - some params like growth_rate_setter must be set at construction
     agent_kwargs = {}
@@ -248,6 +250,8 @@ def run_simulation_image_gen(
     # Note: Only 'strength' is writable via Python API.
     if 'interaction_strength' in sim_params:
         agent_settings.interaction.strength = float(sim_params['interaction_strength'])
+    if 'radius' in sim_params:
+        agent_settings.interaction.radius = float(sim_params['radius'])
 
     # Determine number of bacteria
     rng = np.random.default_rng(simulation_seed)
