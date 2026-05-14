@@ -4,6 +4,12 @@
 # Used by `crm_gen run` and `crm_gen clone`.
 # Parameters with [min, max] ranges will be sampled uniformly.
 # If min == max, the exact value is used.
+#
+# Every parameter in cr_mech_coli/crm_gen/parameter_registry.py is mirrored
+# below. Effects can be disabled per-modality by setting the relevant
+# intensity to 0 (or toggling apply_psf / apply_poisson / apply_gaussian).
+# Comments mark which modality each phase-contrast or brightfield param
+# applies to.
 
 [pipeline]
 output_dir = "./outputs"
@@ -40,7 +46,6 @@ rigidity = [2.0, 2.0]                   # Joint stiffness at connections
 damping = [1.0, 1.0]                    # Damping constant (1/min)
 
 # Cell-cell interaction parameters (Morse potential)
-# Note: Only interaction_strength is writable via Python API.
 interaction_strength = [0.1, 0.1]       # Interaction strength (um^2/min^2)
 
 # Environment parameters
@@ -63,43 +68,76 @@ pbr = false                             # Physics-based rendering (disabled)
 ssao_radius = 0.0                       # Screen-space ambient occlusion (disabled)
 
 [synthetic]
-# The 7 optimised imaging parameters (output of `crm_gen fit`)
-bg_base_brightness = 0.2845             # Base brightness for background (0.0-1.0)
-bg_gradient_strength = 0.0185           # Illumination gradient intensity (0.0-1.0)
-bac_halo_intensity = 0.439              # Halo effect intensity around bacteria (0.0-1.0)
-bg_noise_scale = 22                     # Background illumination noise scale (1-25)
-psf_sigma = 2.49                        # Point Spread Function (PSF) blur sigma (pixels); typical 0.5-2.0
-peak_signal = 8964.939                  # Peak photon count for Poisson noise (higher = less noise)
-gaussian_sigma = 0.003                  # Gaussian readout noise sigma (0.001-0.05)
+# === Universal effects (apply to all modalities) ===
+bg_base_brightness    = 0.2845          # Base brightness for background (0.0-1.0); no clean disable
+bg_gradient_strength  = 0.0185          # Illumination gradient intensity (0.0-1.0); set to 0 to disable
+bg_noise_scale        = 22              # Background illumination noise scale (1-25); gated by no flag
+psf_sigma             = 2.49            # PSF blur sigma (pixels); gated by apply_psf
+psf_size              = 7               # PSF kernel size (pixels); gated by apply_psf
+peak_signal           = 8964.939        # Peak photon count for Poisson noise; gated by apply_poisson
+gaussian_sigma        = 0.003           # Gaussian readout noise sigma; gated by apply_gaussian
+defocus_strength      = 0.0             # Spatially-varying defocus (0.0-3.0); set to 0 to disable
+defocus_scale         = 10              # Defocus spatial scale (int); ignored when defocus_strength=0
+vignette_strength     = 0.0             # Corner darkening (0.0-0.5); set to 0 to disable
 
-# Per-frame jitter on the 7 optimised params above.
-# 0.0 = exact values, 0.1 = ±10% of each value, etc.
-variation_factor = 0.0
-
-# Toggle individual effects
-apply_psf = true                        # Apply Point Spread Function blur
-apply_poisson = true                    # Apply Poisson shot noise
+# Effect toggles
+apply_psf      = true                   # Apply Point Spread Function blur
+apply_poisson  = true                   # Apply Poisson shot noise
 apply_gaussian = true                   # Apply Gaussian readout noise
+
+# === Phase contrast only (set bac_halo_intensity = 0 to disable halo) ===
+bac_halo_intensity = 0.439              # Halo effect intensity (0.0-0.6); set to 0 to disable the halo block entirely
+
+# === Brightfield only (set absorption_coeff / edge_fringe_intensity = 0 to disable) ===
+absorption_coeff       = 0.0            # Beer-Lambert absorption (0.0-2.0); set to 0 to disable
+cell_optical_thickness = 3.0            # Effective cell thickness for absorption (um); ignored when absorption_coeff=0
+edge_fringe_intensity  = 0.0            # Diffraction-fringe intensity at cell edge (0.0-0.1); set to 0 to disable
+edge_fringe_width      = 1.5            # Fringe width in pixels; ignored when edge_fringe_intensity=0
 
 [background]
 # Background generation parameters
-consistent = true                       # Use the same background for all frames (for video)
-dark_spot_size_range = [2, 5]           # Range of dark spot sizes (sigma values)
-num_dark_spots_range = [0, 5]           # Range for number of dark spots
-num_light_spots_range = [0, 0]          # Range for number of light spots (disabled)
-texture_strength = 0.02                 # Fine texture strength (0.0-1.0)
-texture_scale = 1.5                     # Texture smoothness (higher = smoother)
-blur_sigma = 0.8                        # Gaussian blur sigma for optical effects
+consistent             = true           # Same background across all frames (for video); also freezes jitter draws per simulation
+dark_spot_size_range   = [2, 5]         # Range of dark spot sigma values
+num_dark_spots_range   = [0, 5]         # Range for number of dark spots
+num_dark_spots_max     = 5              # Registry-style upper bound; when set, overrides num_dark_spots_range[1]. Set to 0 to disable dark spots.
+num_light_spots_range  = [0, 0]         # Range for number of light spots (disabled)
+texture_strength       = 0.02           # Fine texture strength (0.0-1.0); set to 0 to disable
+texture_scale          = 1.5            # Texture smoothness (higher = smoother)
+blur_sigma             = 0.8            # Gaussian blur sigma for optical effects
+dark_spot_intensity    = 0.15           # How dark the debris spots are (0.0-1.0); set to 0 (or num_dark_spots_range=[0,0]) to disable
 
 [halo]
-# Halo effect parameters around bacteria
-inner_width = 2.0                       # Width of inner halo in pixels
+# Phase-contrast halo parameters (only relevant when bac_halo_intensity > 0)
+inner_width = 2.0                       # Width of inner bright halo in pixels
 outer_width = 50.0                      # Total halo width in pixels
-blur_sigma = 0.5                        # Gaussian blur sigma for halo transition
-fade_type = "exponential"               # Fade type: "linear", "exponential", or "gaussian"
+blur_sigma  = 0.5                       # Gaussian blur sigma for halo transition
+fade_type   = "exponential"             # Fade type: "linear", "exponential", or "gaussian"
 
 [brightness]
 # Bacteria brightness mode
-mode = "original"                       # "age" (compute from cell age) or "original" (match from reference)
-brightness_range = [0.5, 0.28]          # [young_brightness, old_brightness] for age mode
-noise_strength = 0.28                   # Perlin-like noise strength for brightness variation (0-1)
+mode             = "original"           # "age" (compute from cell age) or "original" (match from reference)
+brightness_range = [0.5, 0.28]          # [young, old] brightness for age mode
+noise_strength   = 0.28                 # Perlin-like noise strength for brightness variation (0.0-1.0); set to 0 to disable
+
+[jitter]
+# Per-frame +/- fractional jitter on individual params.
+# 0 (or omitted) leaves the param unchanged; 0.05 = +/-5%; 0.10 = +/-10%; etc.
+#
+# Auto-discovery: any name listed here is looked up across [synthetic],
+# [background], [halo], [brightness] at runtime. Adding new param names is
+# safe — unknown names are silently ignored.
+#
+# Cadence: when [background].consistent = true, jitter is drawn ONCE per
+# simulation (frozen across all frames). When consistent = false, jitter is
+# redrawn per frame.
+bg_base_brightness        = 0.0
+bg_gradient_strength      = 0.0
+bg_noise_scale            = 0.0
+psf_sigma                 = 0.0
+peak_signal               = 0.0
+gaussian_sigma            = 0.0
+bac_halo_intensity        = 0.0
+halo_inner_width          = 0.0
+halo_outer_width          = 0.0
+texture_strength          = 0.0
+brightness_noise_strength = 0.0
