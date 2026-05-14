@@ -31,10 +31,6 @@ from tqdm import tqdm
 
 import cr_mech_coli as crm
 from .scene import apply_synthetic_effects
-from .config import PARAM_NAMES
-
-# Alias for backwards compatibility
-OPTIMIZED_PARAM_KEYS = PARAM_NAMES
 
 
 def sample_range(value: Any, rng: np.random.Generator) -> Any:
@@ -74,38 +70,89 @@ def sample_simulation_params(sim_config: Dict[str, Any], rng: np.random.Generato
     return sampled
 
 
-def jitter_synthetic_params(
-    params: Dict[str, Any],
-    variation_factor: float,
-    rng: np.random.Generator
-) -> Dict[str, Any]:
+# Aliases mapping registry-style param names to (section_label, section_key)
+# for cases where the section TOML key differs from the registry name. Only
+# the names listed here need translation; everything else matches its section
+# key directly.
+JITTER_ALIASES: Dict[str, Tuple[str, str]] = {
+    "halo_inner_width": ("halo", "inner_width"),
+    "halo_outer_width": ("halo", "outer_width"),
+    "halo_blur_sigma": ("halo", "blur_sigma"),
+    "bg_blur_sigma": ("background", "blur_sigma"),
+    "brightness_noise_strength": ("brightness", "noise_strength"),
+}
+
+
+def apply_jitter(
+    config_dicts: Dict[str, Dict[str, Any]],
+    jitter_factors: Dict[str, float],
+    rng: np.random.Generator,
+) -> Dict[str, Dict[str, Any]]:
     """
-    Apply variation jitter to the 7 optimized parameters.
+    Apply per-parameter fractional jitter across multiple config sections.
+
+    For each ``(name, factor)`` pair in ``jitter_factors`` with ``factor > 0``,
+    resolve ``name`` to a ``(section, key)`` location and replace the value
+    with one drawn uniformly from ``[base*(1 - factor), base*(1 + factor)]``.
+    The result is clamped to non-negative when the base is non-negative.
+    Non-numeric values (bool/str/list) are skipped silently. Unknown names
+    (not in any section and not in ``JITTER_ALIASES``) are silently no-ops.
+
+    Name resolution order:
+      1. If ``name`` is in :data:`JITTER_ALIASES`, the alias's
+         ``(section, key)`` is used.
+      2. Otherwise the first section that contains ``name`` as a key wins.
 
     Args:
-        params (Dict[str, Any]): Dictionary containing the base synthetic parameters.
-        variation_factor (float): Fraction of the value to vary (0.1 = +/-10%).
-        rng (np.random.Generator): NumPy random generator.
+        config_dicts: Mapping from section label to its config dict, e.g.
+            ``{"synthetic": ..., "background": ..., "halo": ..., "brightness": ...}``.
+        jitter_factors: Mapping from param name to fractional variation
+            (``0.05`` = +/-5%, ``0`` or missing = disabled).
+        rng: NumPy random generator.
 
     Returns:
-        Dict[str, Any]: New dictionary with jittered values (only the 7 optimized
-            params are modified).
+        Dict[str, Dict[str, Any]]: New dict-of-dicts (shallow-copied sections)
+            with jittered values; inputs are not mutated.
     """
-    if variation_factor <= 0:
-        return params.copy()
+    out = {section: cfg.copy() for section, cfg in config_dicts.items()}
+    if not jitter_factors:
+        return out
 
-    jittered = params.copy()
-    for key in OPTIMIZED_PARAM_KEYS:
-        if key in jittered:
-            base_val = jittered[key]
-            delta = abs(base_val) * variation_factor
-            jittered[key] = float(rng.uniform(base_val - delta, base_val + delta))
-            # Ensure non-negative for parameters that require it
-            if key in ('bg_base_brightness', 'bg_gradient_strength', 'bac_halo_intensity',
-                       'bg_noise_scale', 'psf_sigma', 'peak_signal', 'gaussian_sigma'):
-                jittered[key] = max(0.0, jittered[key])
+    def _resolve(name: str):
+        """Return (section_label, key) or None if the name can't be resolved."""
+        if name in JITTER_ALIASES:
+            section, key = JITTER_ALIASES[name]
+            if section in out and key in out[section]:
+                return section, key
+            return None
+        for section, cfg in out.items():
+            if name in cfg:
+                return section, name
+        return None
 
-    return jittered
+    for param, factor in jitter_factors.items():
+        try:
+            factor = float(factor)
+        except (TypeError, ValueError):
+            continue
+        if factor <= 0:
+            continue
+        location = _resolve(param)
+        if location is None:
+            continue
+        section, key = location
+        cfg = out[section]
+        base = cfg[key]
+        if isinstance(base, bool) or not isinstance(base, (int, float)):
+            continue
+        base = float(base)
+        delta = abs(base) * factor
+        new_val = float(rng.uniform(base - delta, base + delta))
+        if base >= 0:
+            new_val = max(0.0, new_val)
+        cfg[key] = new_val
+
+    return out
 
 
 def load_parameter_sets(param_files: List[str]) -> List[Dict[str, Any]]:
@@ -281,7 +328,8 @@ def render_and_save_frame(
     iteration: int,
     domain_size: Tuple[float, float],
     output_dir: Path,
-    render_settings: crm.RenderSettings
+    render_settings: crm.RenderSettings,
+    file_prefix: str = "",
 ) -> Tuple[np.ndarray, np.ndarray, Dict]:
     """
     Render and save a single frame (image and mask).
@@ -292,6 +340,8 @@ def render_and_save_frame(
         domain_size (Tuple[float, float]): Simulation domain size.
         output_dir (Path): Directory to save output files.
         render_settings (crm.RenderSettings): Rendering configuration.
+        file_prefix (str): Prefix prepended to every output filename (e.g.
+            ``"sim_0003_"``). Empty string disables prefixing.
 
     Returns:
         Tuple[np.ndarray, np.ndarray, Dict]: (image, mask, cell_colors_dict).
@@ -316,8 +366,8 @@ def render_and_save_frame(
 
     # Save files
     frame_name = f"{iteration:09d}"
-    image_path = output_dir / f"{frame_name}.tif"
-    mask_path = output_dir / f"{frame_name}_masks.tif"
+    image_path = output_dir / f"{file_prefix}{frame_name}.tif"
+    mask_path = output_dir / f"{file_prefix}{frame_name}_masks.tif"
 
     tiff.imwrite(image_path, image, compression='zlib')
     tiff.imwrite(mask_path, mask, compression='zlib')
@@ -333,7 +383,9 @@ def process_frame_for_synthetic(args):
         args: Tuple of (frame_idx, iteration, generated_dir, synthetic_dir,
             cell_ages, cell_colors_serializable, synthetic_config,
             background_config, halo_config, brightness_config,
-            variation_factor, delete_after_processing, bg_seed).
+            jitter_factors, delete_after_processing, bg_seed, file_prefix).
+            When ``jitter_factors`` is empty, the four config dicts are used
+            as-is (already jittered at sim level, or no jitter requested).
 
     Returns:
         Tuple[int, int, Dict]: (frame_idx, iteration, params) with the parameters
@@ -350,9 +402,10 @@ def process_frame_for_synthetic(args):
         background_config,
         halo_config,
         brightness_config,
-        variation_factor,
+        jitter_factors,
         delete_after_processing,
-        bg_seed
+        bg_seed,
+        file_prefix,
     ) = args
 
     # Reconstruct cell_colors dict (keys were serialized)
@@ -362,8 +415,8 @@ def process_frame_for_synthetic(args):
 
     # Load generated image and mask
     frame_name = f"{iteration:09d}"
-    image_path = generated_dir / f"{frame_name}.tif"
-    mask_path = generated_dir / f"{frame_name}_masks.tif"
+    image_path = generated_dir / f"{file_prefix}{frame_name}.tif"
+    mask_path = generated_dir / f"{file_prefix}{frame_name}_masks.tif"
     image = tiff.imread(image_path)
     mask = tiff.imread(mask_path)
 
@@ -371,42 +424,71 @@ def process_frame_for_synthetic(args):
     seed = np.random.default_rng().integers(0, 2**31)
     rng = np.random.default_rng(seed)
 
-    # Apply variation_factor jitter to the 7 optimized parameters
-    params = jitter_synthetic_params(synthetic_config, variation_factor, rng)
+    # Per-frame jitter (no-op when jitter_factors is empty, e.g. when the
+    # sim-level branch already froze the values for consistent backgrounds).
+    jittered = apply_jitter(
+        {
+            "synthetic": synthetic_config,
+            "background": background_config,
+            "halo": halo_config,
+            "brightness": brightness_config,
+        },
+        jitter_factors,
+        rng,
+    )
+    synthetic_params = jittered["synthetic"]
+    background_params = jittered["background"]
+    halo_params = jittered["halo"]
+    brightness_params = jittered["brightness"]
 
     # Extract parameters with defaults
-    bg_base_brightness = params.get('bg_base_brightness', 0.56)
-    bg_gradient_strength = params.get('bg_gradient_strength', 0.027)
-    bac_halo_intensity = params.get('bac_halo_intensity', 0.30)
-    bg_noise_scale = int(params.get('bg_noise_scale', 20))  # Must be int
-    psf_sigma = params.get('psf_sigma', 1.0)
-    peak_signal = params.get('peak_signal', 1000.0)
-    gaussian_sigma = params.get('gaussian_sigma', 0.01)
+    bg_base_brightness = synthetic_params.get('bg_base_brightness', 0.56)
+    bg_gradient_strength = synthetic_params.get('bg_gradient_strength', 0.027)
+    bac_halo_intensity = synthetic_params.get('bac_halo_intensity', 0.30)
+    bg_noise_scale = int(synthetic_params.get('bg_noise_scale', 20))  # Must be int
+    psf_sigma = synthetic_params.get('psf_sigma', 1.0)
+    peak_signal = synthetic_params.get('peak_signal', 1000.0)
+    gaussian_sigma = synthetic_params.get('gaussian_sigma', 0.01)
 
     # Effect toggles
-    apply_psf = params.get('apply_psf', True)
-    apply_poisson = params.get('apply_poisson', True)
-    apply_gaussian = params.get('apply_gaussian', True)
+    apply_psf = synthetic_params.get('apply_psf', True)
+    apply_poisson = synthetic_params.get('apply_poisson', True)
+    apply_gaussian = synthetic_params.get('apply_gaussian', True)
 
     # Background params
-    bg_dark_spot_size_range = tuple(background_config.get('dark_spot_size_range', [2, 5]))
-    bg_num_dark_spots_range = tuple(background_config.get('num_dark_spots_range', [0, 5]))
-    bg_num_light_spots_range = tuple(background_config.get('num_light_spots_range', [0, 0]))
-    bg_texture_strength = background_config.get('texture_strength', 0.02)
-    bg_texture_scale = background_config.get('texture_scale', 1.5)
-    bg_blur_sigma = background_config.get('blur_sigma', 0.8)
+    bg_dark_spot_size_range = tuple(background_params.get('dark_spot_size_range', [2, 5]))
+    bg_num_dark_spots_range = tuple(background_params.get('num_dark_spots_range', [0, 5]))
+    # Registry-style upper bound; when present, it overrides num_dark_spots_range[1].
+    if 'num_dark_spots_max' in background_params:
+        bg_num_dark_spots_range = (0, int(background_params['num_dark_spots_max']))
+    bg_num_light_spots_range = tuple(background_params.get('num_light_spots_range', [0, 0]))
+    bg_texture_strength = background_params.get('texture_strength', 0.02)
+    bg_texture_scale = background_params.get('texture_scale', 1.5)
+    bg_blur_sigma = background_params.get('blur_sigma', 0.8)
+    dark_spot_intensity = background_params.get('dark_spot_intensity', 0.15)
 
     # Halo params
-    halo_inner_width = halo_config.get('inner_width', 2.0)
-    halo_outer_width = halo_config.get('outer_width', 50.0)
-    halo_blur_sigma = halo_config.get('blur_sigma', 0.5)
-    halo_fade_type = halo_config.get('fade_type', 'exponential')
+    halo_inner_width = halo_params.get('inner_width', 2.0)
+    halo_outer_width = halo_params.get('outer_width', 50.0)
+    halo_blur_sigma = halo_params.get('blur_sigma', 0.5)
+    halo_fade_type = halo_params.get('fade_type', 'exponential')
 
     # Brightness params
-    brightness_mode = brightness_config.get('mode', 'age')
-    brightness_range = tuple(brightness_config.get('brightness_range', [0.8, 0.3]))
-    max_age = brightness_config.get('max_age')
-    brightness_noise_strength = brightness_config.get('noise_strength', 0.0)
+    brightness_mode = brightness_params.get('mode', 'age')
+    brightness_range = tuple(brightness_params.get('brightness_range', [0.8, 0.3]))
+    max_age = brightness_params.get('max_age')
+    brightness_noise_strength = brightness_params.get('noise_strength', 0.0)
+
+    # Extended optical params (registry-mapped, zero-value disable except for
+    # parent-gated children like cell_optical_thickness/defocus_scale).
+    psf_size = int(synthetic_params.get('psf_size', 7))
+    absorption_coeff = synthetic_params.get('absorption_coeff', 0.0)
+    cell_optical_thickness = synthetic_params.get('cell_optical_thickness', 3.0)
+    defocus_strength = synthetic_params.get('defocus_strength', 0.0)
+    defocus_scale = int(synthetic_params.get('defocus_scale', 10))
+    vignette_strength = synthetic_params.get('vignette_strength', 0.0)
+    edge_fringe_intensity = synthetic_params.get('edge_fringe_intensity', 0.0)
+    edge_fringe_width = synthetic_params.get('edge_fringe_width', 1.5)
 
     # Create synthetic image using shared function
     synthetic_image = apply_synthetic_effects(
@@ -444,11 +526,21 @@ def process_frame_for_synthetic(args):
         # Brightness noise
         brightness_noise_strength=brightness_noise_strength,
         # Consistent background across frames
-        bg_seed=bg_seed
+        bg_seed=bg_seed,
+        # Extended registry params
+        dark_spot_intensity=dark_spot_intensity,
+        psf_size=psf_size,
+        absorption_coeff=absorption_coeff,
+        cell_optical_thickness=cell_optical_thickness,
+        defocus_strength=defocus_strength,
+        defocus_scale=defocus_scale,
+        vignette_strength=vignette_strength,
+        edge_fringe_intensity=edge_fringe_intensity,
+        edge_fringe_width=edge_fringe_width,
     )
 
     # Save synthetic image and copy mask
-    output_prefix = f"syn_{frame_name}"
+    output_prefix = f"{file_prefix}syn_{frame_name}"
     tiff.imwrite(
         synthetic_dir / f"{output_prefix}.tif",
         synthetic_image,
@@ -467,7 +559,7 @@ def process_frame_for_synthetic(args):
         if mask_path.exists():
             mask_path.unlink()
 
-    return frame_idx, iteration, params
+    return frame_idx, iteration, synthetic_params
 
 
 def run_pipeline(
@@ -492,6 +584,7 @@ def run_pipeline(
     background_config: Dict[str, Any] = None,
     halo_config: Dict[str, Any] = None,
     brightness_config: Dict[str, Any] = None,
+    jitter_factors: Dict[str, float] = None,
     n_simulations: int = 1
 ):
     """
@@ -538,6 +631,8 @@ def run_pipeline(
         halo_config = {}
     if brightness_config is None:
         brightness_config = {'brightness_range': list(brightness_range)}
+    if jitter_factors is None:
+        jitter_factors = {}
 
     # Setup base output directory
     output_base = Path(output_dir)
@@ -550,8 +645,11 @@ def run_pipeline(
     if n_workers is None or n_workers == 0:
         n_workers = mp.cpu_count()
 
-    # Extract variation_factor from synthetic_config
-    variation_factor = synthetic_config.get('variation_factor', 0.0)
+    # Count the number of params that will actually be jittered (factor > 0)
+    active_jitter = sum(
+        1 for v in jitter_factors.values()
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and float(v) > 0
+    )
 
     # Load legacy parameter sets if provided (for backwards compatibility)
     param_sets = []
@@ -570,7 +668,7 @@ def run_pipeline(
     print(f"  Image size: {image_size}")
     print(f"  Base seed: {simulation_seed}")
     print(f"  Workers: {n_workers}")
-    print(f"  Variation factor: {variation_factor}")
+    print(f"  Jitter: {active_jitter} param(s) active")
     print(f"{'='*60}")
 
     # Main loop over simulations
@@ -595,14 +693,11 @@ def run_pipeline(
         n_verts_actual = int(sampled_sim_params.get('n_vertices', n_vertices))
         max_len_actual = sampled_sim_params.get('spring_length_threshold', max_bacteria_length)
 
-        # Determine output directory for this simulation
-        if n_simulations > 1:
-            sim_output_dir = output_base / f"sim_{sim_idx:04d}"
-        else:
-            sim_output_dir = output_base
-
-        generated_dir = sim_output_dir / "generated"
-        synthetic_dir = sim_output_dir / "synthetic"
+        # All simulations share one generated/ and one synthetic/ directory; per-sim
+        # files are distinguished by the file_prefix instead of a per-sim subdir.
+        file_prefix = f"sim_{sim_idx:04d}_" if n_simulations > 1 else ""
+        generated_dir = output_base / "generated"
+        synthetic_dir = output_base / "synthetic"
 
         generated_dir.mkdir(parents=True, exist_ok=True)
         if not skip_synthetic:
@@ -678,7 +773,8 @@ def run_pipeline(
                 iteration=iteration,
                 domain_size=config.domain_size,
                 output_dir=generated_dir,
-                render_settings=render_settings
+                render_settings=render_settings,
+                file_prefix=file_prefix,
             )
             cell_colors_per_iteration[iteration] = colors
 
@@ -694,6 +790,34 @@ def run_pipeline(
         consistent_bg = background_config.get('consistent', True)
         bg_seed = int(sim_rng.integers(0, 2**31)) if consistent_bg else None
 
+        # Jitter cadence:
+        #   consistent_bg=True  -> draw jitter ONCE for this sim using sim_rng;
+        #                          workers receive frozen configs + empty factors.
+        #   consistent_bg=False -> workers re-jitter every frame; pass original
+        #                          configs + full factors.
+        if consistent_bg and active_jitter > 0:
+            frozen = apply_jitter(
+                {
+                    "synthetic": synthetic_config,
+                    "background": background_config,
+                    "halo": halo_config,
+                    "brightness": brightness_config_with_max_age,
+                },
+                jitter_factors,
+                sim_rng,
+            )
+            worker_synthetic = frozen["synthetic"]
+            worker_background = frozen["background"]
+            worker_halo = frozen["halo"]
+            worker_brightness = frozen["brightness"]
+            worker_jitter_factors = {}
+        else:
+            worker_synthetic = synthetic_config
+            worker_background = background_config
+            worker_halo = halo_config
+            worker_brightness = brightness_config_with_max_age
+            worker_jitter_factors = jitter_factors
+
         # Step 4: Save metadata
         metadata = {
             "simulation_seed": sim_seed,
@@ -707,21 +831,22 @@ def run_pipeline(
             "iterations": iterations,
             "max_age": max_age_overall,
             "sampled_sim_params": sampled_sim_params,
-            "synthetic_config": synthetic_config,
-            "background_config": background_config,
-            "halo_config": halo_config,
-            "brightness_config": brightness_config,
+            "synthetic_config": worker_synthetic,
+            "background_config": worker_background,
+            "halo_config": worker_halo,
+            "brightness_config": worker_brightness,
             "rendering_config": rendering_config,
             "consistent_background": consistent_bg,
             "bg_seed": bg_seed,
-            "variation_factor": variation_factor,
+            "jitter_factors": jitter_factors,
+            "jitter_frozen_per_sim": bool(consistent_bg and active_jitter > 0),
             "ages_per_iteration": {
                 str(it): {str(k): v for k, v in ages.items()}
                 for it, ages in all_ages.items()
             }
         }
 
-        with open(sim_output_dir / "metadata.json", 'w') as f:
+        with open(output_base / f"{file_prefix}metadata.json", 'w') as f:
             json.dump(metadata, f, indent=2, default=str)
 
         if skip_synthetic:
@@ -738,8 +863,9 @@ def run_pipeline(
         print(f"\n=== Step 4: Generating synthetic images ===")
         print(f"  Total images to generate: {len(iterations)}")
         print(f"  Workers: {n_workers}")
-        if variation_factor > 0:
-            print(f"  Variation factor: {variation_factor} (per-frame jitter enabled)")
+        if active_jitter > 0:
+            cadence = "frozen per-sim" if consistent_bg else "per-frame"
+            print(f"  Jitter: {active_jitter} param(s), {cadence}")
 
         # Prepare arguments for parallel processing
         work_items = []
@@ -751,9 +877,6 @@ def run_pipeline(
             # Serialize ages
             ages_serializable = {str(k): v for k, v in all_ages[iteration].items()}
 
-            # Determine if this is the last frame (for deletion)
-            is_last_frame = (frame_idx == len(iterations) - 1)
-
             work_items.append((
                 frame_idx,
                 iteration,
@@ -761,13 +884,14 @@ def run_pipeline(
                 synthetic_dir,
                 ages_serializable,
                 colors_serializable,
-                synthetic_config,
-                background_config,
-                halo_config,
-                brightness_config_with_max_age,
-                variation_factor,
-                delete_generated and is_last_frame,
-                bg_seed
+                worker_synthetic,
+                worker_background,
+                worker_halo,
+                worker_brightness,
+                worker_jitter_factors,
+                delete_generated,
+                bg_seed,
+                file_prefix,
             ))
 
         # Process in parallel
@@ -785,10 +909,12 @@ def run_pipeline(
 
         print(f"  Saved synthetic images to {synthetic_dir}")
 
-        # Step 6: Cleanup - remove generated directory if requested
-        if delete_generated and generated_dir.exists():
-            shutil.rmtree(generated_dir, ignore_errors=True)
-            print(f"  Cleaned up {generated_dir}")
+    # Final cleanup: remove the shared generated/ directory once all sims have
+    # finished (workers delete their own files per-frame when delete_generated
+    # is set, so this just removes the now-empty dir).
+    if delete_generated and not skip_synthetic and generated_dir.exists():
+        shutil.rmtree(generated_dir, ignore_errors=True)
+        print(f"  Cleaned up {generated_dir}")
 
     print(f"\n{'='*60}")
     print(f"Pipeline complete")
