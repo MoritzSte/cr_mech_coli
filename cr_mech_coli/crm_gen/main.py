@@ -235,6 +235,7 @@ def _run_generate(config, config_path):
     background_config = config.get("background", {})
     halo_config = config.get("halo", {})
     brightness_config = config.get("brightness", {})
+    jitter_config = config.get("jitter", {})
 
     # Extract pipeline parameters
     output_dir = pipeline_config.get("output_dir", "./outputs")
@@ -289,6 +290,7 @@ def _run_generate(config, config_path):
         background_config=background_config,
         halo_config=halo_config,
         brightness_config=brightness_config,
+        jitter_factors=jitter_config,
         n_simulations=n_simulations,
     )
 
