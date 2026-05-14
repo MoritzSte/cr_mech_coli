@@ -63,6 +63,17 @@ def apply_synthetic_effects(
     brightness_noise_strength: float = 0.0,
     # Separate background seed for consistent backgrounds across frames
     bg_seed: int = None,
+    # Extended registry params (previously hardcoded in the params-less branch).
+    # Each has a zero-value or parent-gated disable; see comments in scene body.
+    dark_spot_intensity: float = 0.15,
+    psf_size: int = 7,
+    absorption_coeff: float = 0.0,
+    cell_optical_thickness: float = 3.0,
+    defocus_strength: float = 0.0,
+    defocus_scale: int = 10,
+    vignette_strength: float = 0.0,
+    edge_fringe_intensity: float = 0.0,
+    edge_fringe_width: float = 1.5,
     # Dict-based parameter override — keys override individual kwargs above
     params: dict = None,
 ) -> np.ndarray:
@@ -155,16 +166,8 @@ def apply_synthetic_effects(
         vignette_strength = _p["vignette_strength"]
         edge_fringe_intensity = _p["edge_fringe_intensity"]
         edge_fringe_width = _p["edge_fringe_width"]
-    else:
-        dark_spot_intensity = 0.15  # legacy default
-        psf_size = 7
-        absorption_coeff = 0.0
-        cell_optical_thickness = 3.0
-        defocus_strength = 0.0
-        defocus_scale = 10
-        vignette_strength = 0.0
-        edge_fringe_intensity = 0.0
-        edge_fringe_width = 1.5
+    # When params is None, the values above come directly from the function
+    # kwargs — see signature for defaults.
 
     # Generate random seed if not provided
     if seed is None:
