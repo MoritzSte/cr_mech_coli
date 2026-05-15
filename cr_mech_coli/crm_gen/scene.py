@@ -65,7 +65,7 @@ def apply_synthetic_effects(
     bg_seed: int = None,
     # Extended registry params (previously hardcoded in the params-less branch).
     # Each has a zero-value or parent-gated disable; see comments in scene body.
-    dark_spot_intensity: float = 0.15,
+    dark_spot_intensity: float = 0.0,
     psf_size: int = 7,
     absorption_coeff: float = 0.0,
     cell_optical_thickness: float = 3.0,
@@ -247,11 +247,12 @@ def apply_synthetic_effects(
             cell_optical_thickness=cell_optical_thickness,
         )
 
-    # 5. Phase contrast halo (no-op when bac_halo_intensity <= 0)
+    # 5. Phase contrast halo (no-op when bac_halo_intensity <= 0).
+    # Pass the RGB mask so cell-cell contacts get their own halo band.
     if bac_halo_intensity > 0:
         synthetic_image = filters.apply_halo_effect(
             synthetic_image,
-            binary_mask,
+            mask,
             halo_intensity=bac_halo_intensity,
             inner_width=halo_inner_width,
             outer_width=halo_outer_width,
@@ -259,11 +260,12 @@ def apply_synthetic_effects(
             fade_type=halo_fade_type,
         )
 
-    # 6. Edge diffraction fringe (brightfield: thin boundary effect)
+    # 6. Edge diffraction fringe (brightfield: thin boundary effect).
+    # Pass the RGB mask so cell-cell contacts get their own fringe ripple.
     if edge_fringe_intensity > 0:
         synthetic_image = filters.apply_edge_diffraction_fringe(
             synthetic_image,
-            binary_mask,
+            mask,
             edge_fringe_intensity=edge_fringe_intensity,
             edge_fringe_width=edge_fringe_width,
         )
@@ -505,7 +507,9 @@ def create_synthetic_scene(
 
     # Apply synthetic effects using shared function
     if params is not None:
-        # Dict-based path: only pass non-imaging kwargs + params dict
+        # Dict-based path: registry params come from `params`; orthogonal
+        # toggles / non-registry settings are still forwarded explicitly so
+        # callers (e.g. clone, fit, screen) keep control over them.
         synthetic_image = apply_synthetic_effects(
             raw_image=synthetic_image,
             mask=synthetic_mask,
@@ -518,6 +522,12 @@ def create_synthetic_scene(
             original_image=microscope_image,
             original_mask=segmentation_mask,
             original_colors=colors,
+            apply_psf=apply_psf,
+            apply_poisson=apply_poisson,
+            apply_gaussian=apply_gaussian,
+            halo_fade_type=halo_fade_type,
+            dark_spot_size_range=dark_spot_size_range,
+            num_light_spots_range=num_light_spots_range,
             params=params,
         )
     else:
