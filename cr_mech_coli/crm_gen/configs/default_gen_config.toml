@@ -108,7 +108,7 @@ dark_spot_intensity    = 0.15           # How dark the debris spots are (0.0-1.0
 
 [halo]
 # Phase-contrast halo parameters (only relevant when bac_halo_intensity > 0)
-inner_width = 2.0                       # Width of inner bright halo in pixels
+inner_width = 3.5                       # Width of inner bright halo in pixels; keep >~ psf_sigma so it survives downstream blur
 outer_width = 50.0                      # Total halo width in pixels
 blur_sigma  = 0.5                       # Gaussian blur sigma for halo transition
 fade_type   = "exponential"             # Fade type: "linear", "exponential", or "gaussian"
