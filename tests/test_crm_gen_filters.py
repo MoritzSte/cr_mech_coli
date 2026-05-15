@@ -12,6 +12,9 @@ from cr_mech_coli.crm_gen.filters import (
     add_poisson_noise,
     add_gaussian_noise,
     apply_halo_effect,
+    apply_edge_diffraction_fringe,
+    create_halo_gradient,
+    _mask_distance_fields,
 )
 from cr_mech_coli.crm_gen.metrics import compute_all_metrics
 
@@ -112,6 +115,129 @@ def test_halo_effect_modifies_boundary_pixels():
     assert result[boundary_ring].mean() > img[boundary_ring].mean(), (
         "halo effect did not brighten boundary pixels"
     )
+
+
+# Boundary-aware distance fields (shared by halo + edge fringe)
+
+def _two_touching_labels() -> np.ndarray:
+    """2-D integer label mask: two cells sharing a contact line at column 32."""
+    lab = np.zeros((H, W), dtype=np.int32)
+    lab[16:48, 12:32] = 1
+    lab[16:48, 32:52] = 2
+    return lab
+
+
+def _legacy_distance_inside(binary: np.ndarray) -> np.ndarray:
+    """The pre-refactor inner-distance field: distance to nearest background."""
+    from scipy.ndimage import distance_transform_edt
+    return distance_transform_edt(binary)
+
+
+def test_mask_distance_fields_binary_matches_legacy():
+    """For binary masks (bool, {0,1}, {0,255}) the helper's distance_inside
+    must equal the legacy distance-to-background field."""
+    from scipy.ndimage import distance_transform_edt
+
+    circ = _circular_mask()
+    for m in (circ, circ.astype(np.uint8), (circ * 255).astype(np.uint8)):
+        binary, dist_in, dist_out = _mask_distance_fields(m)
+        assert np.array_equal(binary, circ)
+        assert np.allclose(dist_in, _legacy_distance_inside(circ)), (
+            "binary mask should use the legacy distance-to-background field"
+        )
+        assert np.allclose(dist_out, distance_transform_edt(~circ))
+
+
+def test_mask_distance_fields_labeled_uses_contacts():
+    """A labelled mask must yield a distance_inside that is ~0 on the
+    cell-cell contact line (the legacy field would be large there)."""
+    lab = _two_touching_labels()
+    binary, dist_in, _ = _mask_distance_fields(lab)
+    # Column 31/32 straddle the contact; a mid-height row sits deep in both cells.
+    assert dist_in[32, 31] < 1.5 and dist_in[32, 32] < 1.5, (
+        "labelled mask should put a boundary at the cell-cell contact"
+    )
+    assert _legacy_distance_inside(binary)[32, 31] > 3.0, (
+        "sanity: the legacy field is large at the contact (the bug being fixed)"
+    )
+
+
+def test_create_halo_gradient_unchanged_for_binary():
+    """The helper refactor must not change create_halo_gradient output for a
+    plain binary mask — recompute the legacy formula by hand and compare."""
+    from scipy.ndimage import distance_transform_edt
+
+    circ = _circular_mask()
+    inner_width, outer_width = 2.0, 8.0
+    d_in = distance_transform_edt(circ)
+    d_out = distance_transform_edt(~circ)
+    ref = np.zeros((H, W), dtype=np.float64)
+    ref[circ] = np.clip(1.0 - d_in[circ] / inner_width, 0, 1)
+    dn = d_out[~circ] / outer_width
+    ref[~circ] = np.exp(-6 * dn) * (dn <= 1.0)
+
+    got = create_halo_gradient(circ, inner_width=inner_width, outer_width=outer_width)
+    assert np.array_equal(got, ref), "create_halo_gradient binary output changed"
+
+
+# Edge diffraction fringe
+
+def test_edge_fringe_ripples_at_cell_contacts():
+    """The fringe must ripple along a cell-cell contact when given a labelled
+    mask; a merged binary mask leaves that contact line essentially flat."""
+    img = _gray_image(120)
+    lab = _two_touching_labels()
+    binary = lab > 0
+
+    out_labeled = apply_edge_diffraction_fringe(img, lab, edge_fringe_intensity=0.05)
+    out_merged = apply_edge_diffraction_fringe(img, binary, edge_fringe_intensity=0.05)
+
+    # Sample the shared contact column, away from the outer cell edges.
+    contact = (slice(20, 44), slice(31, 33))
+    labeled_delta = np.abs(
+        out_labeled[contact].astype(np.int16) - img[contact].astype(np.int16)
+    ).mean()
+    merged_delta = np.abs(
+        out_merged[contact].astype(np.int16) - img[contact].astype(np.int16)
+    ).mean()
+
+    assert labeled_delta > 1.0, (
+        f"labelled-mask fringe did not ripple at the contact (delta={labeled_delta:.2f})"
+    )
+    assert merged_delta < labeled_delta / 2, (
+        f"merged-mask fringe unexpectedly active at contact "
+        f"(merged={merged_delta:.2f}, labelled={labeled_delta:.2f})"
+    )
+
+
+def test_edge_fringe_empty_mask_is_noop():
+    """An all-zero mask must leave the image untouched (clean no-op)."""
+    img = _gray_image(120)
+    empty = np.zeros((H, W), dtype=np.int32)
+    out = apply_edge_diffraction_fringe(img, empty, edge_fringe_intensity=0.05)
+    assert np.array_equal(out, img)
+
+
+def test_edge_fringe_binary_backward_compat():
+    """For a 2-D bool mask the fringe must match the pre-refactor formula."""
+    from scipy.ndimage import distance_transform_edt, gaussian_filter
+
+    img = _gray_image(120)
+    circ = _circular_mask()
+    intensity, width = 0.05, 1.5
+
+    d_out = distance_transform_edt(~circ)
+    d_in = distance_transform_edt(circ)
+    dist = np.where(circ, -d_in, d_out)
+    w = max(width, 1e-6)
+    fringe = intensity * np.cos(2.0 * np.pi * dist / w) * np.exp(-np.abs(dist) / (w * 2.0))
+    fringe = gaussian_filter(fringe, sigma=0.5)
+    ref = np.clip(img.astype(np.float64) / 255.0 + fringe[..., np.newaxis], 0.0, 1.0)
+    ref = (ref * 255).astype(np.uint8)
+
+    got = apply_edge_diffraction_fringe(img, circ, edge_fringe_intensity=intensity,
+                                        edge_fringe_width=width)
+    assert np.array_equal(got, ref), "edge fringe binary output changed"
 
 
 # Metrics
