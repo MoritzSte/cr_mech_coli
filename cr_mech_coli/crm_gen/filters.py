@@ -338,6 +338,69 @@ def apply_gaussian_blur(image: np.ndarray, sigma: float = 1.0) -> np.ndarray:
 # ============================================================================
 
 
+def _rgb_mask_to_labels(mask: np.ndarray) -> np.ndarray:
+    """Pack an HxWx3 uint8 RGB mask into an HxW int label image.
+
+    Background ``(0, 0, 0)`` maps to label 0. Each distinct cell colour
+    becomes a distinct positive integer.
+    """
+    m = mask.astype(np.int64)
+    return (m[..., 0] << 16) | (m[..., 1] << 8) | m[..., 2]
+
+
+def _mask_distance_fields(mask: np.ndarray):
+    """Compute the boundary-aware distance fields shared by the halo and the
+    edge-diffraction fringe.
+
+    Args:
+        mask (np.ndarray): One of: a 2-D binary mask (True/1 = foreground); a
+            2-D integer label mask with one label per cell; or a 3-D HxWx3 RGB
+            mask with one colour per cell.
+
+    Returns:
+        tuple: ``(binary, distance_inside, distance_outside)``.
+
+        - ``binary``: 2-D bool merged foreground.
+        - ``distance_inside``: distance from each pixel to the nearest cell
+          boundary. For a labelled / RGB mask "boundary" includes cell-cell
+          *and* cell-background edges (so touching cells get a band at the
+          contact line); for a plain binary mask it is the legacy distance to
+          the nearest background pixel.
+        - ``distance_outside``: distance from each pixel to the nearest
+          foreground pixel.
+
+    For an empty mask ``binary`` is all-False and the distance fields are
+    degenerate — callers must guard with ``binary.any()`` and return early.
+    """
+    if mask.ndim == 3:
+        # RGB mask: derive the merged foreground plus per-cell labels.
+        binary = mask.any(axis=2)
+        labels = _rgb_mask_to_labels(mask)
+    elif mask.dtype != bool and len(np.unique(mask)) > 2:
+        # 2-D integer label mask: more than two distinct values means multiple
+        # cell labels are present (a {0, X} binary mask has only two).
+        binary = mask > 0
+        labels = mask.astype(np.int64)
+    else:
+        # 2-D binary mask (legacy callers): single merged blob, no internal
+        # boundaries.
+        binary = mask > 0 if mask.dtype != bool else mask.copy()
+        labels = None
+
+    if labels is not None:
+        from skimage.segmentation import find_boundaries
+
+        inner_boundaries = find_boundaries(labels, mode="inner", background=0)
+        # Distance from every pixel to the nearest boundary pixel — cell-cell
+        # contacts included, not just cell-background edges.
+        distance_inside = distance_transform_edt(~inner_boundaries)
+    else:
+        distance_inside = distance_transform_edt(binary)
+
+    distance_outside = distance_transform_edt(~binary)
+    return binary, distance_inside, distance_outside
+
+
 def create_halo_gradient(
     mask: np.ndarray,
     inner_width: float = 2.0,
@@ -348,7 +411,11 @@ def create_halo_gradient(
     Create a smooth gradient field for halo intensity that fades from edge outward.
 
     Args:
-        mask (np.ndarray): Binary mask where True/1 = bacteria (foreground).
+        mask (np.ndarray): One of: a 2-D binary mask (True/1 = foreground); a
+            2-D integer label mask with one label per cell; or a 3-D HxWx3 RGB
+            mask with one colour per cell. With a labelled or RGB mask the
+            inner halo is computed from cell-cell *and* cell-background
+            boundaries, so touching cells each get a halo at the contact line.
         inner_width (float): Width of inner bright halo (in pixels).
         outer_width (float): Total width of halo region (in pixels).
         fade_type (str): Type of fade: 'linear', 'exponential', or 'gaussian'.
@@ -357,32 +424,23 @@ def create_halo_gradient(
         np.ndarray: Gradient field with values [0,1] where 1 is at the edge,
             fading to 0.
     """
-    from scipy.ndimage import distance_transform_edt
+    binary, distance_inside, distance_outside = _mask_distance_fields(mask)
 
-    # Convert to boolean if needed
-    if mask.dtype != bool:
-        mask_bool = mask > 0
-    else:
-        mask_bool = mask.copy()
-
-    # Distance from foreground edge (outside)
-    distance_outside = distance_transform_edt(~mask_bool)
-
-    # Distance from background edge (inside)
-    distance_inside = distance_transform_edt(mask_bool)
+    if not binary.any():
+        return np.zeros(binary.shape, dtype=np.float64)
 
     # Initialize gradient
-    gradient = np.zeros_like(mask, dtype=np.float64)
+    gradient = np.zeros(binary.shape, dtype=np.float64)
 
     # Create gradient based on distance
     # Inside bacteria: gradient increases towards edge
-    inside_region = mask_bool
+    inside_region = binary
     gradient[inside_region] = np.clip(
         1.0 - distance_inside[inside_region] / inner_width, 0, 1
     )
 
     # Outside bacteria: gradient decreases from edge
-    outside_region = ~mask_bool
+    outside_region = ~binary
     dist_norm = distance_outside[outside_region] / outer_width
 
     if fade_type == "linear":
@@ -416,7 +474,10 @@ def apply_halo_effect(
     Args:
         image (np.ndarray): Input image (grayscale or RGB). Can be float [0,1] or
             uint8 [0,255].
-        mask (np.ndarray): Binary mask where True/1 = bacteria (foreground).
+        mask (np.ndarray): A 2-D binary mask, a 2-D integer label mask (one
+            label per cell), or a 3-D HxWx3 RGB mask (one colour per cell).
+            A labelled or RGB mask gives every cell edge — including cell-cell
+            contacts — its own halo band.
         halo_intensity (float): Strength of halo effect (0.0 to 1.0). Higher values
             create more pronounced halos. Typical range: 0.1-0.3.
         inner_width (float): Width of inner halo in pixels (typically bright).
@@ -440,15 +501,10 @@ def apply_halo_effect(
     else:
         img_float = image.astype(np.float64)
 
-    # Convert to boolean if needed
-    if mask.dtype != bool:
-        mask_bool = mask > 0
-    else:
-        mask_bool = mask.copy()
-
-    # Create halo gradient
+    # Create halo gradient. The mask (2-D binary or 3-D RGB) is passed through
+    # unchanged so create_halo_gradient can pick up per-cell boundaries.
     gradient = create_halo_gradient(
-        mask_bool, inner_width=inner_width, outer_width=outer_width, fade_type=fade_type
+        mask, inner_width=inner_width, outer_width=outer_width, fade_type=fade_type
     )
 
     # Apply Gaussian blur to smooth the gradient
@@ -940,7 +996,10 @@ def apply_edge_diffraction_fringe(
 
     Args:
         image (np.ndarray): Input image (grayscale or RGB).
-        mask (np.ndarray): Binary mask where True/1 = cell.
+        mask (np.ndarray): A 2-D binary mask, a 2-D integer label mask (one
+            label per cell), or a 3-D HxWx3 RGB mask (one colour per cell).
+            A labelled or RGB mask gives every cell edge — including cell-cell
+            contacts — its own fringe ripple.
         edge_fringe_intensity (float): Peak amplitude of the fringe.
             0.0 = no-op. Typical range: 0.01-0.05.
         edge_fringe_width (float): Width parameter of the fringe (pixels).
@@ -959,12 +1018,14 @@ def apply_edge_diffraction_fringe(
     else:
         img_float = image.astype(np.float64)
 
-    mask_bool = mask > 0 if mask.dtype != bool else mask
+    binary, distance_inside, distance_outside = _mask_distance_fields(mask)
+    if not binary.any():
+        return image.copy()
 
-    dist_outside = distance_transform_edt(~mask_bool)
-    dist_inside = distance_transform_edt(mask_bool)
-    # Signed distance: positive outside, negative inside (but dampening uses |d|)
-    dist = np.where(mask_bool, -dist_inside, dist_outside)
+    # Signed distance: positive outside, negative inside (dampening uses |d|).
+    # distance_inside is boundary-aware so the ripple is at full amplitude
+    # along cell-cell contacts, not just free cell edges.
+    dist = np.where(binary, -distance_inside, distance_outside)
 
     w = max(edge_fringe_width, 1e-6)
     fringe = (
