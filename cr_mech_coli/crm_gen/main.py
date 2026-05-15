@@ -295,6 +295,65 @@ def _run_generate(config, config_path):
     )
 
 
+# Mapping from registry parameter name to (toml_section, toml_key). Registry
+# names whose section key matches are listed identity-style; the trailing
+# entries cover the names that differ between section key and registry name.
+_REGISTRY_TO_SECTION_KEY = {
+    # [synthetic] — section key == registry name
+    "bg_base_brightness": ("synthetic", "bg_base_brightness"),
+    "bg_gradient_strength": ("synthetic", "bg_gradient_strength"),
+    "bac_halo_intensity": ("synthetic", "bac_halo_intensity"),
+    "bg_noise_scale": ("synthetic", "bg_noise_scale"),
+    "psf_sigma": ("synthetic", "psf_sigma"),
+    "psf_size": ("synthetic", "psf_size"),
+    "peak_signal": ("synthetic", "peak_signal"),
+    "gaussian_sigma": ("synthetic", "gaussian_sigma"),
+    "absorption_coeff": ("synthetic", "absorption_coeff"),
+    "cell_optical_thickness": ("synthetic", "cell_optical_thickness"),
+    "defocus_strength": ("synthetic", "defocus_strength"),
+    "defocus_scale": ("synthetic", "defocus_scale"),
+    "vignette_strength": ("synthetic", "vignette_strength"),
+    "edge_fringe_intensity": ("synthetic", "edge_fringe_intensity"),
+    "edge_fringe_width": ("synthetic", "edge_fringe_width"),
+    # [background] — section key == registry name
+    "texture_strength": ("background", "texture_strength"),
+    "texture_scale": ("background", "texture_scale"),
+    "dark_spot_intensity": ("background", "dark_spot_intensity"),
+    "num_dark_spots_max": ("background", "num_dark_spots_max"),
+    # Aliased names (section key differs from registry name)
+    "bg_blur_sigma": ("background", "blur_sigma"),
+    "halo_inner_width": ("halo", "inner_width"),
+    "halo_outer_width": ("halo", "outer_width"),
+    "halo_blur_sigma": ("halo", "blur_sigma"),
+    "brightness_noise_strength": ("brightness", "noise_strength"),
+}
+
+
+def _build_registry_params(synthetic_config, background_config, halo_config, brightness_config):
+    """Collect every registry-named parameter present in the TOML config
+    sections into a flat dict suitable for ``create_synthetic_scene(params=...)``.
+
+    Keys that are absent from the TOML fall back to registry defaults inside
+    ``apply_synthetic_effects``. Special case: if ``num_dark_spots_max`` is not
+    explicitly set but ``num_dark_spots_range`` is, the range's upper bound is
+    used as the max.
+    """
+    sections = {
+        "synthetic": synthetic_config,
+        "background": background_config,
+        "halo": halo_config,
+        "brightness": brightness_config,
+    }
+    params = {}
+    for registry_name, (section, key) in _REGISTRY_TO_SECTION_KEY.items():
+        section_dict = sections[section]
+        if key in section_dict:
+            params[registry_name] = section_dict[key]
+    if "num_dark_spots_max" not in params and "num_dark_spots_range" in background_config:
+        params["num_dark_spots_max"] = int(background_config["num_dark_spots_range"][1])
+    return params
+
+
 def _run_clone(args, config):
     """
     Create a synthetic clone of a real microscope image.
@@ -321,35 +380,29 @@ def _run_clone(args, config):
     if seed is None:
         seed = synthetic_config.get("seed", None)
 
+    # Registry-merged params (covers all 24 imaging knobs, including the 9
+    # newer ones — absorption/defocus/vignette/edge_fringe/psf_size/etc.).
+    # Orthogonal non-registry settings (mode toggles, fade type, range tuples)
+    # are still passed as individual kwargs.
+    params = _build_registry_params(
+        synthetic_config, background_config, halo_config, brightness_config
+    )
+
     create_synthetic_scene(
         microscope_image_path=args.microscope_image,
         segmentation_mask_path=args.segmentation_mask,
         output_dir=args.output,
         n_vertices=n_vertices,
         seed=seed,
-        bg_base_brightness=synthetic_config.get("bg_base_brightness", 0.56),
-        bg_gradient_strength=synthetic_config.get("bg_gradient_strength", 0.027),
-        bac_halo_intensity=synthetic_config.get("bac_halo_intensity", 0.40),
-        bg_noise_scale=int(synthetic_config.get("bg_noise_scale", 20)),
-        psf_sigma=synthetic_config.get("psf_sigma", 1.0),
-        peak_signal=synthetic_config.get("peak_signal", 6000.0),
-        gaussian_sigma=synthetic_config.get("gaussian_sigma", 0.01),
         brightness_mode=brightness_config.get("mode", "original"),
         brightness_range=tuple(brightness_config.get("brightness_range", [0.6, 0.3])),
-        num_dark_spots_range=tuple(background_config.get("num_dark_spots_range", [0, 5])),
-        brightness_noise_strength=brightness_config.get("noise_strength", 0.0),
         apply_psf=synthetic_config.get("apply_psf", True),
         apply_poisson=synthetic_config.get("apply_poisson", True),
         apply_gaussian=synthetic_config.get("apply_gaussian", True),
-        halo_inner_width=halo_config.get("inner_width", 2.0),
-        halo_outer_width=halo_config.get("outer_width", 50.0),
-        halo_blur_sigma=halo_config.get("blur_sigma", 0.5),
         halo_fade_type=halo_config.get("fade_type", "exponential"),
         dark_spot_size_range=tuple(background_config.get("dark_spot_size_range", [2, 5])),
         num_light_spots_range=tuple(background_config.get("num_light_spots_range", [0, 0])),
-        texture_strength=background_config.get("texture_strength", 0.02),
-        texture_scale=background_config.get("texture_scale", 1.5),
-        bg_blur_sigma=background_config.get("blur_sigma", 0.8),
+        params=params,
     )
 
 
