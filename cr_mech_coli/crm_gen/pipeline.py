@@ -465,7 +465,7 @@ def process_frame_for_synthetic(args):
     bg_texture_strength = background_params.get('texture_strength', 0.02)
     bg_texture_scale = background_params.get('texture_scale', 1.5)
     bg_blur_sigma = background_params.get('blur_sigma', 0.8)
-    dark_spot_intensity = background_params.get('dark_spot_intensity', 0.15)
+    dark_spot_intensity = background_params.get('dark_spot_intensity', 0.0)
 
     # Halo params
     halo_inner_width = halo_params.get('inner_width', 2.0)
