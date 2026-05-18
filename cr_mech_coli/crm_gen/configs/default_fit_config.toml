@@ -13,10 +13,11 @@ imaging_mode = "all"
 
 [optimization]
 output_dir = ""                         # Output directory (empty = ./fit_results_<timestamp>)
-limit = 0                               # Maximum number of images to use (0 = all)
+limit = 15                              # Maximum number of images to use (0 = all). 15 keeps DE budget low; bump for final reporting runs.
 n_vertices = 8                          # Number of vertices per cell for shape extraction
 maxiter = 50                            # Maximum differential evolution iterations
 popsize = 15                            # Population size multiplier (population = popsize * num_params)
+tol = 0.02                              # DE convergence tolerance (relative). Larger = earlier stop. scipy default is 0.01.
 workers = -1                            # Number of worker processes (-1 = all CPUs, 1 = sequential)
 seed = 0                                # Random seed for reproducibility
 resume = false                          # Resume from latest checkpoint
@@ -67,6 +68,12 @@ edge_sigma_px = 2.0                     # Boundary-band falloff scale (pixels). 
 # Search bounds [min, max] for each imaging parameter during optimization.
 # These define the space explored by differential evolution.
 # Parameters not listed here fall back to registry defaults.
+#
+# Pinning: Set a bound to [X, X] (equal lo and hi) to pin that parameter
+# at X and remove it from DE entirely.  The auto-conversion is logged on
+# startup as a "Pinned <name> = X" line.  Useful for breaking parameter
+# redundancies (e.g. cell_optical_thickness on brightfield) without
+# needing a separate fixed_params section.
 
 # bg_base_brightness        = [0.0,   0.6  ]   # Background base brightness
 # bg_gradient_strength      = [0.0,   0.04 ]   # Illumination gradient intensity
