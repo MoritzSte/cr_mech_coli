@@ -1,0 +1,70 @@
+# Fit configuration — phase contrast
+# =========================================================================
+# Modality-specific defaults for `crm_gen fit` against phase-contrast
+# microscopy images.  Layout is identical to default_fit_config.toml;
+# overrides reflect calibration analysis of past PC runs:
+#   - vignette_strength pinned at 0.5 upper-bound in every run → raise.
+#   - gaussian_sigma / texture_strength always collapse to ~0 → tighten.
+#   - psf_sigma trimmed to the diffraction-limited regime.
+#   - defocus_strength trimmed (PC images are in-focus).
+#   - region_weights shifts edge-band up — PC halos/fringes are the signal.
+
+imaging_mode = "phase_contrast"
+
+[optimization]
+output_dir = ""
+limit = 15
+n_vertices = 8
+maxiter = 50
+popsize = 15
+tol = 0.02
+workers = -1
+seed = 0
+resume = false
+resume_dir = ""
+no_checkpoint = false
+save_all_synthetics = true
+warm_start_samples = 200
+
+[optimization.metric_weights]
+histogram_distance = 0.01
+ssim = 1.0
+ms_ssim = 1.0
+gradient_ssim = 1.0
+lpips = 1.0
+power_spectrum = 0.0
+
+[optimization.region_weights]
+# PC halos and edge fringes are the visual signature → raise edge_band.
+background = 0.35
+foreground = 0.35
+foreground_sigma_px = 30.0
+edge_band = 0.30
+edge_sigma_px = 2.0
+
+[optimization.bounds]
+# Tightened per-modality bounds.  Pin with [X, X] to remove a param from DE.
+vignette_strength         = [0.0,   1.0  ]   # was [0, 0.5]; pinned at upper bound in every PC run
+gaussian_sigma            = [0.001, 0.02 ]   # was [0.001, 0.05]; readout noise pinned near 0.001
+texture_strength          = [0.0,   0.02 ]   # was [0, 0.1]; always collapses to ~0
+defocus_strength          = [0.0,   1.5  ]   # was [0, 3]; PC is in-focus, 3.0 unphysical
+psf_sigma                 = [0.3,   1.5  ]   # was [0.1, 3]; trim diffraction-limited range
+
+[screening]
+num_trajectories = 40
+morris_top_n = 10
+run_sobol = true
+sobol_n_samples = 256
+sobol_top_n = 7
+num_screening_images = 20
+use_best_values = false
+use_groups = true
+use_baseline_filter = true
+baseline_improvement_rate_threshold = 0.05
+baseline_improvement_epsilon = 0.01
+
+[screening.coarse_prefit]
+enabled = true
+dominant_params = ["bg_base_brightness"]
+maxiter = 10
+popsize = 5
