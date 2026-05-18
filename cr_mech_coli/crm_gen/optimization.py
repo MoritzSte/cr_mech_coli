@@ -568,6 +568,7 @@ def optimize_parameters(
     fixed_params: Dict = None,
     checkpoint_dir: Path = None,
     init_seed_x: Optional[np.ndarray] = None,
+    tol: float = 0.02,
 ) -> Dict:
     """
     Optimize synthetic image parameters using differential evolution.
@@ -591,6 +592,10 @@ def optimize_parameters(
             When None, uses the full registry.
         fixed_params: Dict of parameter values not being optimized.
             When None, uses registry defaults.
+        tol: Relative convergence tolerance for differential evolution. DE
+            stops once `np.std(pop_energies) <= atol + tol * |np.mean(pop_energies)|`.
+            Default 0.02 — looser than scipy's default (0.01) to favour
+            earlier termination on noisy synthetic-image losses.
 
     Returns:
         Dict: Optimization results including 'parameters', 'optimization_info',
@@ -617,6 +622,7 @@ def optimize_parameters(
     print("Differential evolution settings:")
     print(f"  maxiter: {maxiter}")
     print(f"  popsize: {popsize}")
+    print(f"  tol: {tol}")
     print(f"  workers: {workers}")
     print(f"  seed: {seed}")
     print("=" * 80 + "\n")
@@ -773,6 +779,7 @@ def optimize_parameters(
             bounds=bounds,
             maxiter=remaining_iters,
             popsize=popsize,
+            tol=tol,
             updating="deferred" if n_workers != 1 else "immediate",
             polish=False,
             init=init_population,
