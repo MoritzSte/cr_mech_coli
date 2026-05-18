@@ -94,6 +94,10 @@ cell_optical_thickness = 3.0            # Effective cell thickness for absorptio
 edge_fringe_intensity  = 0.0            # Diffraction-fringe intensity at cell edge (0.0-0.1); set to 0 to disable
 edge_fringe_width      = 1.5            # Fringe width in pixels; ignored when edge_fringe_intensity=0
 
+# === Fluorescence only (set dark_rim_intensity = 0 to disable the dark cell rim) ===
+dark_rim_intensity     = 0.0            # Dark inner rim strength at each cell boundary (0.0-1.0); set to 0 to disable
+dark_rim_width         = 1.5            # Rim fade width in pixels; ignored when dark_rim_intensity=0
+
 [background]
 # Background generation parameters
 consistent             = true           # Same background across all frames (for video); also freezes jitter draws per simulation
@@ -141,3 +145,5 @@ halo_inner_width          = 0.0
 halo_outer_width          = 0.0
 texture_strength          = 0.0
 brightness_noise_strength = 0.0
+dark_rim_intensity        = 0.0
+dark_rim_width            = 0.0
