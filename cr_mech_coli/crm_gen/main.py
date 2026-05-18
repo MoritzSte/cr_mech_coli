@@ -315,6 +315,8 @@ _REGISTRY_TO_SECTION_KEY = {
     "vignette_strength": ("synthetic", "vignette_strength"),
     "edge_fringe_intensity": ("synthetic", "edge_fringe_intensity"),
     "edge_fringe_width": ("synthetic", "edge_fringe_width"),
+    "dark_rim_intensity": ("synthetic", "dark_rim_intensity"),
+    "dark_rim_width": ("synthetic", "dark_rim_width"),
     # [background] — section key == registry name
     "texture_strength": ("background", "texture_strength"),
     "texture_scale": ("background", "texture_scale"),
