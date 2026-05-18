@@ -338,13 +338,6 @@ def create_synthetic_scene(
     segmentation_mask_path,
     output_dir=None,
     n_vertices: int = 8,
-    bg_base_brightness: float = 0.56,
-    bg_gradient_strength: float = 0.027,
-    bac_halo_intensity: float = 0.30,
-    bg_noise_scale: int = 20,
-    psf_sigma: float = 1.0,
-    peak_signal: float = 1000.0,
-    gaussian_sigma: float = 0.01,
     seed: int = None,
     # Brightness mode parameters
     brightness_mode: str = "original",
@@ -352,32 +345,26 @@ def create_synthetic_scene(
     cell_colors_map: dict = None,
     brightness_range: tuple = (0.8, 0.3),
     max_age: int = None,
-    # Dark spots range
-    num_dark_spots_range: tuple = (0, 5),
     # Output naming
     output_prefix: str = "syn_",
-    # Brightness noise
-    brightness_noise_strength: float = 0.0,
     # Effect toggles
     apply_psf: bool = True,
     apply_poisson: bool = True,
     apply_gaussian: bool = True,
-    # Halo params
-    halo_inner_width: float = 2.0,
-    halo_outer_width: float = 50.0,
-    halo_blur_sigma: float = 0.5,
+    # Non-registry halo + background parameters (registry-controlled values
+    # come via ``params``).
     halo_fade_type: str = "exponential",
-    # Remaining background params
     dark_spot_size_range: tuple = (2, 5),
     num_light_spots_range: tuple = (0, 0),
-    texture_strength: float = 0.02,
-    texture_scale: float = 1.5,
-    bg_blur_sigma: float = 0.8,
-    # Dark cell rim (fluorescence)
-    dark_rim_intensity: float = 0.0,
-    dark_rim_width: float = 1.5,
-    # Dict-based parameter override — keys override individual kwargs above
+    # Registry-controlled imaging parameters: a flat ``{name: value}`` dict
+    # populated by the caller (e.g. ``_build_registry_params`` for clone,
+    # ``build_full_params`` for fit / screen). Missing keys fall back to
+    # registry defaults inside ``apply_synthetic_effects``.
     params: dict = None,
+    # PyVista render settings (from TOML [rendering] section). Keys override
+    # the per-attribute defaults applied below. When None, the defaults are
+    # used unchanged.
+    rendering_config: dict = None,
     # Whether to write output files to disk (set False for optimization/screening)
     save: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -389,13 +376,6 @@ def create_synthetic_scene(
         segmentation_mask_path: Path to the segmentation mask (TIF).
         output_dir: Directory to save synthetic images.
         n_vertices (int): Number of vertices to extract per cell.
-        bg_base_brightness (float): Base brightness for background generation.
-        bg_gradient_strength (float): Gradient strength for background generation.
-        bac_halo_intensity (float): Intensity of the halo effect around bacteria.
-        bg_noise_scale (int): Scale factor for background illumination noise (1-25).
-        psf_sigma (float): Sigma for Gaussian PSF blur (optical diffraction).
-        peak_signal (float): Peak photon count for Poisson noise (higher = less noise).
-        gaussian_sigma (float): Sigma for Gaussian readout noise.
         seed (int): Random seed for reproducibility. If None, a random seed is generated.
         brightness_mode (str): "original" to match brightness from original image,
             "age" to compute brightness based on cell age.
@@ -405,9 +385,23 @@ def create_synthetic_scene(
             brightness_mode="age").
         brightness_range (tuple): (young_brightness, old_brightness) for age-based mode.
         max_age (int): Maximum age for normalization in age-based mode.
-        num_dark_spots_range (tuple): (min, max) range for number of dark spots in
-            background.
         output_prefix (str): Prefix for output filenames.
+        apply_psf (bool): Whether to apply PSF blur.
+        apply_poisson (bool): Whether to apply Poisson shot noise.
+        apply_gaussian (bool): Whether to apply Gaussian readout noise.
+        halo_fade_type (str): Halo fade profile, "linear" | "exponential" |
+            "gaussian".
+        dark_spot_size_range (tuple): Dark-spot sigma range for background
+            debris.
+        num_light_spots_range (tuple): Range for number of light spots in
+            background.
+        params (dict): Registry-style parameter overrides (e.g. from a
+            TOML config or fit result). Keys absent from the dict fall back
+            to registry defaults.
+        rendering_config (dict): PyVista render settings; per-attribute
+            overrides for the defaults below.
+        save (bool): If True, writes the synthetic image + mask to
+            ``output_dir``; otherwise returns the arrays without writing.
 
     Returns:
         tuple[np.ndarray, np.ndarray]: (synthetic_image, synthetic_mask).
@@ -491,27 +485,27 @@ def create_synthetic_scene(
         color = crm.counter_to_color(i + 1)  # Start from 1 to avoid black (0,0,0)
         colors_dict[cell_id] = color
 
-    # Create render settings
-    # Since we're working in pixel units, set pixel_per_micron = 1.0
+    # Create render settings. Defaults match what the generation pipeline
+    # uses (see pipeline.py:render_and_save_frame); when ``rendering_config``
+    # is provided (e.g. forwarded from the TOML [rendering] section by the
+    # clone subcommand), each present key overrides the corresponding
+    # attribute. Missing keys keep the default.
+    rcfg = rendering_config or {}
     render_settings = crm.RenderSettings()
-    render_settings.pixel_per_micron = 1.0
-
-    # Adjust settings for better image quality
-    render_settings.kernel_size = 2
-    render_settings.noise = 0
-    render_settings.bg_brightness = 0
-    render_settings.cell_brightness = (
-        0  # Start with black bacteria, brightness added from original
-    )
-
-    # Additional settings for a more microscope-like appearance
-    render_settings.ambient = 0.3
-    render_settings.diffuse = 0.7
-    render_settings.specular = 0.0
-    render_settings.specular_power = 0.0
-    render_settings.metallic = 0.0
-    render_settings.pbr = False
-    render_settings.ssao_radius = 0.0
+    render_settings.pixel_per_micron = rcfg.get('pixel_per_micron', 1.0)
+    render_settings.kernel_size = rcfg.get('kernel_size', 2)
+    render_settings.noise = rcfg.get('noise', 0)
+    render_settings.bg_brightness = rcfg.get('bg_brightness', 0)
+    # cell_brightness: start with black bacteria; brightness comes from the
+    # original-image match (or the age model) downstream.
+    render_settings.cell_brightness = rcfg.get('cell_brightness', 0)
+    render_settings.ambient = rcfg.get('ambient', 0.3)
+    render_settings.diffuse = rcfg.get('diffuse', 0.7)
+    render_settings.specular = rcfg.get('specular', 0.0)
+    render_settings.specular_power = rcfg.get('specular_power', 0.0)
+    render_settings.metallic = rcfg.get('metallic', 0.0)
+    render_settings.pbr = rcfg.get('pbr', False)
+    render_settings.ssao_radius = rcfg.get('ssao_radius', 0.0)
 
     # Render synthetic microscope image
     synthetic_image = crm.render_image(
@@ -528,69 +522,30 @@ def create_synthetic_scene(
         render_settings=render_settings,
     )
 
-    # Apply synthetic effects using shared function
-    if params is not None:
-        # Dict-based path: registry params come from `params`; orthogonal
-        # toggles / non-registry settings are still forwarded explicitly so
-        # callers (e.g. clone, fit, screen) keep control over them.
-        synthetic_image = apply_synthetic_effects(
-            raw_image=synthetic_image,
-            mask=synthetic_mask,
-            seed=seed,
-            brightness_mode=brightness_mode,
-            cell_ages=cell_ages,
-            cell_colors_map=cell_colors_map,
-            brightness_range=brightness_range,
-            max_age=max_age,
-            original_image=microscope_image,
-            original_mask=segmentation_mask,
-            original_colors=colors,
-            apply_psf=apply_psf,
-            apply_poisson=apply_poisson,
-            apply_gaussian=apply_gaussian,
-            halo_fade_type=halo_fade_type,
-            dark_spot_size_range=dark_spot_size_range,
-            num_light_spots_range=num_light_spots_range,
-            params=params,
-        )
-    else:
-        # Legacy kwargs path (used by clone subcommand)
-        synthetic_image = apply_synthetic_effects(
-            raw_image=synthetic_image,
-            mask=synthetic_mask,
-            bg_base_brightness=bg_base_brightness,
-            bg_gradient_strength=bg_gradient_strength,
-            bac_halo_intensity=bac_halo_intensity,
-            bg_noise_scale=bg_noise_scale,
-            psf_sigma=psf_sigma,
-            peak_signal=peak_signal,
-            gaussian_sigma=gaussian_sigma,
-            seed=seed,
-            brightness_mode=brightness_mode,
-            cell_ages=cell_ages,
-            cell_colors_map=cell_colors_map,
-            brightness_range=brightness_range,
-            max_age=max_age,
-            num_dark_spots_range=num_dark_spots_range,
-            original_image=microscope_image,
-            original_mask=segmentation_mask,
-            original_colors=colors,
-            brightness_noise_strength=brightness_noise_strength,
-            apply_psf=apply_psf,
-            apply_poisson=apply_poisson,
-            apply_gaussian=apply_gaussian,
-            halo_inner_width=halo_inner_width,
-            halo_outer_width=halo_outer_width,
-            halo_blur_sigma=halo_blur_sigma,
-            halo_fade_type=halo_fade_type,
-            dark_spot_size_range=dark_spot_size_range,
-            num_light_spots_range=num_light_spots_range,
-            texture_strength=texture_strength,
-            texture_scale=texture_scale,
-            bg_blur_sigma=bg_blur_sigma,
-            dark_rim_intensity=dark_rim_intensity,
-            dark_rim_width=dark_rim_width,
-        )
+    # Apply synthetic effects via the shared params-dict pathway.
+    # Registry-controlled values come from ``params`` (missing keys fall back
+    # to registry defaults inside apply_synthetic_effects); orthogonal toggles
+    # / non-registry settings are forwarded explicitly.
+    synthetic_image = apply_synthetic_effects(
+        raw_image=synthetic_image,
+        mask=synthetic_mask,
+        seed=seed,
+        brightness_mode=brightness_mode,
+        cell_ages=cell_ages,
+        cell_colors_map=cell_colors_map,
+        brightness_range=brightness_range,
+        max_age=max_age,
+        original_image=microscope_image,
+        original_mask=segmentation_mask,
+        original_colors=colors,
+        apply_psf=apply_psf,
+        apply_poisson=apply_poisson,
+        apply_gaussian=apply_gaussian,
+        halo_fade_type=halo_fade_type,
+        dark_spot_size_range=dark_spot_size_range,
+        num_light_spots_range=num_light_spots_range,
+        params=params if params is not None else {},
+    )
 
     # Save results with output_prefix + original filename
     if save:
