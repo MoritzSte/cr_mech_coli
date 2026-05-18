@@ -372,6 +372,7 @@ def _run_clone(args, config):
     halo_config = config.get("halo", {})
     brightness_config = config.get("brightness", {})
     simulation_config = config.get("simulation", {})
+    rendering_config = config.get("rendering", {})
 
     # CLI overrides > config > defaults
     n_vertices = args.n_vertices
@@ -404,6 +405,7 @@ def _run_clone(args, config):
         halo_fade_type=halo_config.get("fade_type", "exponential"),
         dark_spot_size_range=tuple(background_config.get("dark_spot_size_range", [2, 5])),
         num_light_spots_range=tuple(background_config.get("num_light_spots_range", [0, 0])),
+        rendering_config=rendering_config,
         params=params,
     )
 
@@ -893,10 +895,11 @@ def crm_gen_main():
     """
     Main CLI entry point for crm_gen.
 
-    Dispatches to the appropriate subcommand (``run``, ``clone``, or ``fit``).
-    Each subcommand has its own optional ``--config`` argument with a sensible
-    default: ``run`` and ``clone`` use ``configs/default_gen_config.toml``;
-    ``fit`` uses ``configs/default_fit_config.toml``.
+    Dispatches to the appropriate subcommand (``run``, ``clone``, ``fit``,
+    or ``screen``). Each subcommand has its own optional ``--config``
+    argument with a sensible default: ``run`` and ``clone`` use
+    ``configs/default_gen_config.toml``; ``fit`` and ``screen`` use
+    ``configs/default_fit_config.toml``.
     """
     from .config import load_config
 
@@ -925,7 +928,7 @@ def crm_gen_main():
     # Load configuration
     if args.config is None:
         print("Error: No config file specified and no default config found.")
-        if args.command == "fit":
+        if args.command in ("fit", "screen"):
             print("Use --config to specify a fit TOML configuration file.")
         else:
             print("Use --config to specify a generation TOML configuration file.")
