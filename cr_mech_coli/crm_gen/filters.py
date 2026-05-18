@@ -1047,3 +1047,96 @@ def apply_edge_diffraction_fringe(
         result = (result * 255).astype(np.uint8)
 
     return result
+
+
+def apply_dark_cell_rim(
+    image: np.ndarray,
+    mask: np.ndarray,
+    background: np.ndarray,
+    intensity: float = 0.0,
+    width: float = 1.5,
+    fade_type: str = "exponential",
+) -> np.ndarray:
+    """Blend a thin dark rim at every cell boundary toward the background.
+
+    Models the per-cell membrane attenuation visible in fluorescence
+    microscopy: every cell has a thin band at its silhouette where the
+    intensity drops toward the local background. When two cells touch, each
+    contributes a rim at the shared boundary, so the visible dark separator
+    line between adjacent rods emerges from per-cell rims overlapping — no
+    contact-specific logic is required.
+
+    Args:
+        image (np.ndarray): Composited 2-D or 3-D image (grayscale / RGB),
+            float [0,1] or uint8 [0,255].
+        mask (np.ndarray): 3-D HxWx3 RGB mask (one colour per cell). 2-D
+            binary / label masks are also accepted via
+            :func:`_mask_distance_fields`.
+        background (np.ndarray): Pre-composite background buffer, same H/W
+            as ``image``. Pixels at the rim blend toward this buffer, so the
+            rim picks up the background's gradient + texture.
+        intensity (float): Peak blend weight at the rim. ``0.0`` returns the
+            input unchanged; ``1.0`` fully replaces the rim with background.
+        width (float): Width of the inner fade in pixels.
+        fade_type (str): ``'linear'``, ``'exponential'`` (default), or
+            ``'gaussian'`` — matches :func:`create_halo_gradient`.
+
+    Returns:
+        np.ndarray: Image with the dark rim applied (same dtype as input).
+
+    Notes:
+        Apply BEFORE PSF blur and noise so the blur softens the sharp inner
+        boundary into a realistic narrow trough.
+    """
+    if intensity <= 0:
+        return image.copy()
+
+    input_dtype = image.dtype
+    is_uint8 = input_dtype == np.uint8
+
+    if is_uint8:
+        img_float = image.astype(np.float64) / 255.0
+        bg_float = background.astype(np.float64) / 255.0 if background.dtype == np.uint8 else background.astype(np.float64)
+    else:
+        img_float = image.astype(np.float64)
+        bg_float = background.astype(np.float64)
+
+    binary, distance_inside, _ = _mask_distance_fields(mask)
+    if not binary.any():
+        return image.copy()
+
+    # Inner gradient: 1 at every cell boundary (cell-bg AND cell-cell),
+    # smoothly fading to 0 toward the cell interior. Lives only inside cells.
+    w = max(width, 1e-6)
+    grad = np.zeros(binary.shape, dtype=np.float64)
+    grad[binary] = np.clip(1.0 - distance_inside[binary] / w, 0.0, 1.0)
+
+    if fade_type == "linear":
+        pass
+    elif fade_type == "exponential":
+        # Same shape as create_halo_gradient's outside-exponential, but
+        # parameterised in the inside-fade variable.
+        grad = np.where(grad > 0, np.exp(-6.0 * (1.0 - grad)), 0.0)
+    elif fade_type == "gaussian":
+        # Recompute from distance directly for the symmetric Gaussian look.
+        grad = np.where(binary, np.exp(-0.5 * (distance_inside / w * 3.0) ** 2), 0.0)
+        grad = np.where(distance_inside <= w, grad, 0.0)
+    else:
+        raise ValueError(f"Unknown fade_type: {fade_type}")
+
+    alpha = intensity * grad
+
+    if img_float.ndim == 2:
+        bg_2d = bg_float if bg_float.ndim == 2 else bg_float.mean(axis=-1)
+        result = img_float * (1.0 - alpha) + bg_2d * alpha
+    else:
+        a = alpha[..., np.newaxis]
+        bg_3d = bg_float[..., np.newaxis] if bg_float.ndim == 2 else bg_float
+        result = img_float * (1.0 - a) + bg_3d * a
+
+    result = np.clip(result, 0.0, 1.0)
+
+    if is_uint8:
+        result = (result * 255).astype(np.uint8)
+
+    return result
