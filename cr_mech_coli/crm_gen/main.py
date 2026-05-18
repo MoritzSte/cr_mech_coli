@@ -532,6 +532,55 @@ def _run_screen(args, config, config_path):
     print(f"\nUse with fit: crm_gen fit {args.input_dir} --screening-results {output_path}")
 
 
+def _resolve_active_bounds_and_pins(active_param_names, bounds_config, fixed_params=None):
+    """Resolve per-parameter bounds and auto-pin equal-bound entries.
+
+    For each name in ``active_param_names``, looks up its bound from
+    ``bounds_config`` (falling back to the registry default).  If the
+    resolved bound has ``lo == hi`` (within a float tolerance), the
+    parameter is removed from the active set and recorded in
+    ``fixed_params`` at that value — pinning it without needing a
+    separate fixed_params config section.
+
+    Args:
+        active_param_names: Ordered list of parameter names DE would
+            otherwise search over.
+        bounds_config: Mapping ``name -> (lo, hi)`` from the
+            ``[optimization.bounds]`` TOML section (may be empty or
+            sparse; unknown names fall back to registry defaults).
+        fixed_params: Existing fixed-params dict to augment, or None.
+
+    Returns:
+        Tuple ``(active_param_names_filtered, bounds, fixed_params,
+        pinned_msgs)`` — the active list and bounds list both exclude
+        pinned params; ``fixed_params`` is a new dict containing any
+        pre-existing entries plus the new pins; ``pinned_msgs`` is a
+        list of human-readable strings describing each pin (one per
+        auto-converted entry).
+    """
+    from .parameter_registry import PARAMETER_REGISTRY
+
+    fixed_params = dict(fixed_params or {})
+    pinned_msgs: list = []
+    filtered_active: list = []
+    filtered_bounds: list = []
+    for name in active_param_names:
+        lo, hi = (
+            tuple(bounds_config[name]) if name in bounds_config
+            else PARAMETER_REGISTRY[name].bounds
+        )
+        lo_f, hi_f = float(lo), float(hi)
+        if abs(lo_f - hi_f) < 1e-9:
+            fixed_params[name] = lo_f
+            pinned_msgs.append(
+                f"  Pinned {name} = {lo_f:g} (from [{lo_f:g}, {hi_f:g}] bound)"
+            )
+        else:
+            filtered_active.append(name)
+            filtered_bounds.append((lo_f, hi_f))
+    return filtered_active, filtered_bounds, fixed_params, pinned_msgs
+
+
 def _run_fit(args, config, config_path):
     """
     Optimize synthetic image parameters to match real microscope images.
@@ -569,6 +618,7 @@ def _run_fit(args, config, config_path):
     n_vertices = opt_config.get("n_vertices", 8)
     maxiter = opt_config.get("maxiter", 50)
     popsize = opt_config.get("popsize", 15)
+    tol = float(opt_config.get("tol", 0.02))
     workers = opt_config.get("workers", -1)
     seed = opt_config.get("seed", 42)
     resume = opt_config.get("resume", False)
@@ -709,13 +759,17 @@ def _run_fit(args, config, config_path):
         active_param_names = get_param_names_for_mode(imaging_mode)
         fixed_params = {}
 
-    # Build bounds for active parameters
+    # Build bounds for active parameters; auto-pin any [X, X] entries.
     bounds_config = opt_config.get("bounds", {})
-    bounds = [
-        tuple(bounds_config[name]) if name in bounds_config
-        else PARAMETER_REGISTRY[name].bounds
-        for name in active_param_names
-    ]
+    active_param_names, bounds, fixed_params, _pinned_msgs = (
+        _resolve_active_bounds_and_pins(
+            active_param_names, bounds_config, fixed_params
+        )
+    )
+    if _pinned_msgs:
+        print("Auto-pinned parameters from equal-bound entries:")
+        for _msg in _pinned_msgs:
+            print(_msg)
 
     # Create or reuse output directory
     if resume and resume_dir:
@@ -828,6 +882,7 @@ def _run_fit(args, config, config_path):
         fixed_params=fixed_params,
         checkpoint_dir=output_dir / "checkpoints",
         init_seed_x=init_seed_x,
+        tol=tol,
     )
 
     # Compute final metrics
