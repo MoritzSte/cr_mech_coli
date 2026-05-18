@@ -900,22 +900,22 @@ def apply_defocus_blur(
         upper = np.clip(lower + 1, 0, num_bins - 1)
         frac = bin_idx - lower
 
+        # Per-pixel weights: w_lower for the floor bin (weight 1-frac) and
+        # w_upper for the ceiling bin (weight frac). When sigma == s_max we
+        # get lower == upper == num_bins-1 and frac == 0, which already
+        # puts full weight on the top bin via w_lower — no extra correction
+        # needed.
         if img_float.ndim == 2:
             result = np.zeros_like(img_float)
             for b in range(num_bins):
                 w_lower = (lower == b) * (1.0 - frac)
                 w_upper = (upper == b) * frac
-                # Also account for the case where lower == upper (at s_max)
-                if b == num_bins - 1:
-                    w_upper = w_upper + (lower == b) * (1.0 - frac) * (upper == lower)
                 result += (w_lower + w_upper) * blurred_stack[b]
         else:
             result = np.zeros_like(img_float)
             for b in range(num_bins):
                 w_lower = (lower == b) * (1.0 - frac)
                 w_upper = (upper == b) * frac
-                if b == num_bins - 1:
-                    w_upper = w_upper + (lower == b) * (1.0 - frac) * (upper == lower)
                 weight = (w_lower + w_upper)[..., np.newaxis]
                 result += weight * blurred_stack[b]
 
