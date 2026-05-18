@@ -489,6 +489,8 @@ def process_frame_for_synthetic(args):
     vignette_strength = synthetic_params.get('vignette_strength', 0.0)
     edge_fringe_intensity = synthetic_params.get('edge_fringe_intensity', 0.0)
     edge_fringe_width = synthetic_params.get('edge_fringe_width', 1.5)
+    dark_rim_intensity = synthetic_params.get('dark_rim_intensity', 0.0)
+    dark_rim_width = synthetic_params.get('dark_rim_width', 1.5)
 
     # Create synthetic image using shared function
     synthetic_image = apply_synthetic_effects(
@@ -537,6 +539,8 @@ def process_frame_for_synthetic(args):
         vignette_strength=vignette_strength,
         edge_fringe_intensity=edge_fringe_intensity,
         edge_fringe_width=edge_fringe_width,
+        dark_rim_intensity=dark_rim_intensity,
+        dark_rim_width=dark_rim_width,
     )
 
     # Save synthetic image and copy mask
