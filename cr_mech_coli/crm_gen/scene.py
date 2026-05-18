@@ -74,6 +74,11 @@ def apply_synthetic_effects(
     vignette_strength: float = 0.0,
     edge_fringe_intensity: float = 0.0,
     edge_fringe_width: float = 1.5,
+    # Dark cell rim (fluorescence) — pulls cell-boundary pixels toward the
+    # local background so every cell shows a thin dark rim; adjacent cells'
+    # rims meet at the shared boundary and form the visible separator line.
+    dark_rim_intensity: float = 0.0,
+    dark_rim_width: float = 1.5,
     # Dict-based parameter override — keys override individual kwargs above
     params: dict = None,
 ) -> np.ndarray:
@@ -166,6 +171,8 @@ def apply_synthetic_effects(
         vignette_strength = _p["vignette_strength"]
         edge_fringe_intensity = _p["edge_fringe_intensity"]
         edge_fringe_width = _p["edge_fringe_width"]
+        dark_rim_intensity = _p["dark_rim_intensity"]
+        dark_rim_width = _p["dark_rim_width"]
     # When params is None, the values above come directly from the function
     # kwargs — see signature for defaults.
 
@@ -270,6 +277,19 @@ def apply_synthetic_effects(
             edge_fringe_width=edge_fringe_width,
         )
 
+    # 6.5. Dark inner rim around every cell (fluorescence). Pulls boundary
+    # pixels toward the local background along a smooth gradient that lives
+    # only inside cells; touching cells' rims meet at the shared boundary
+    # and form the visible dark separator without any contact-specific logic.
+    if dark_rim_intensity > 0:
+        synthetic_image = filters.apply_dark_cell_rim(
+            synthetic_image,
+            mask,
+            background=bg,
+            intensity=dark_rim_intensity,
+            width=dark_rim_width,
+        )
+
     # 7. Defocus blur (spatially varying depth-of-field)
     if defocus_strength > 0:
         synthetic_image = filters.apply_defocus_blur(
@@ -353,6 +373,9 @@ def create_synthetic_scene(
     texture_strength: float = 0.02,
     texture_scale: float = 1.5,
     bg_blur_sigma: float = 0.8,
+    # Dark cell rim (fluorescence)
+    dark_rim_intensity: float = 0.0,
+    dark_rim_width: float = 1.5,
     # Dict-based parameter override — keys override individual kwargs above
     params: dict = None,
     # Whether to write output files to disk (set False for optimization/screening)
@@ -565,6 +588,8 @@ def create_synthetic_scene(
             texture_strength=texture_strength,
             texture_scale=texture_scale,
             bg_blur_sigma=bg_blur_sigma,
+            dark_rim_intensity=dark_rim_intensity,
+            dark_rim_width=dark_rim_width,
         )
 
     # Save results with output_prefix + original filename
