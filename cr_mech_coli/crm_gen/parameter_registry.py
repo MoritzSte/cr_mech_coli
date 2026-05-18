@@ -252,6 +252,24 @@ PARAMETER_REGISTRY: Dict[str, ParameterDef] = {
         default=1.5,
         applies_to=("brightfield",),
     ),
+    # ── Dark cell rim (fluorescence) ──────────────────────────────────────
+    "dark_rim_intensity": ParameterDef(
+        name="dark_rim_intensity",
+        group="dark_rim",
+        description="Strength of the dark inner rim drawn at every cell boundary",
+        bounds=(0.0, 1.0),
+        default=0.0,
+        off_value=0.0,
+        applies_to=("fluorescence",),
+    ),
+    "dark_rim_width": ParameterDef(
+        name="dark_rim_width",
+        group="dark_rim",
+        description="Width (px) of the smooth fade from the rim into the cell interior",
+        bounds=(0.5, 4.0),
+        default=1.5,
+        applies_to=("fluorescence",),
+    ),
 }
 
 
