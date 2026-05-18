@@ -788,6 +788,18 @@ def run_pipeline(
         brightness_config_with_max_age = brightness_config.copy()
         brightness_config_with_max_age['max_age'] = max_age_overall
 
+        # `mode = "original"` requires a reference microscope image, which the
+        # generation pipeline doesn't have (it renders from scratch). Force
+        # "age" mode here so the default gen config — which sets "original"
+        # for the benefit of `crm_gen clone` / `fit` — still works for `run`.
+        if brightness_config_with_max_age.get('mode') == 'original':
+            if sim_idx == 0:
+                print(
+                    "  Note: brightness.mode='original' is not valid for `crm_gen run` "
+                    "(no reference image); falling back to 'age'."
+                )
+            brightness_config_with_max_age['mode'] = 'age'
+
         # Derive a consistent background seed for this simulation
         # When background.consistent is true (default), all frames share the
         # same background; otherwise each frame gets its own random background.
