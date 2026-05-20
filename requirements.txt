@@ -1,4 +1,4 @@
-pyvista
+pyvista==0.47.1
 numpy
 opencv-python
 tqdm>=4.60
