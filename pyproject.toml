@@ -12,7 +12,7 @@ classifiers = [
 ]
 dynamic = ["version"]
 dependencies = [
-    "pyvista",
+    "pyvista==0.47.1",
     "numpy",
     "opencv-python",
     "tqdm>=4.60",
@@ -22,8 +22,6 @@ dependencies = [
     "scipy",
     "tifffile",
     "SALib",
-    # LPIPS perceptual loss (crm_gen fit).  Can be bypassed at runtime via
-    # CRM_GEN_DISABLE_LPIPS=1 and setting the 'lpips' metric weight to 0.
     "lpips",
     "torch",
 ]
