@@ -57,6 +57,8 @@ absorption_coeff          = [0.05,  0.4  ]   # free darkness knob (thickness pin
 cell_optical_thickness    = [3.0,   3.0  ]   # PINNED — breaks the absorption × thickness redundancy
 psf_sigma                 = [0.4,   2.0  ]   # carries all blur (BF psf fits were ~0.2)
 defocus_strength          = [0.0,   0.5  ]   # in-focus calibration set
+edge_fringe_intensity     = [0.4,   0.4  ]   
+edge_fringe_width         = [2.5,   2.5  ]
 
 [screening]
 num_trajectories = 40
