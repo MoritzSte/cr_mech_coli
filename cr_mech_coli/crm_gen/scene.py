@@ -477,7 +477,7 @@ def create_synthetic_scene(
         rod_agent = RodAgent(pos=pos_array, vel=vel, **rod_args)
 
         # Override radius with extracted value
-        rod_agent.radius = float(radius) * 0.95
+        rod_agent.radius = float(radius)
 
         cells[cell_id] = (rod_agent, None)  # (agent, parent_id)
 
