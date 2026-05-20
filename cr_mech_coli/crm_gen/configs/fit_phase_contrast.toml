@@ -32,7 +32,7 @@ ssim = 1.0
 ms_ssim = 1.0
 gradient_ssim = 1.0
 lpips = 1.0
-power_spectrum = 0.0
+power_spectrum = 0.2                    # matches the PC mode-gating cluster runs
 
 [optimization.region_weights]
 # PC halos and edge fringes are the visual signature → raise edge_band.
@@ -43,12 +43,20 @@ edge_band = 0.30
 edge_sigma_px = 2.0
 
 [optimization.bounds]
-# Tightened per-modality bounds.  Pin with [X, X] to remove a param from DE.
-vignette_strength         = [0.0,   1.0  ]   # was [0, 0.5]; pinned at upper bound in every PC run
-gaussian_sigma            = [0.001, 0.02 ]   # was [0.001, 0.05]; readout noise pinned near 0.001
-texture_strength          = [0.0,   0.02 ]   # was [0, 0.1]; always collapses to ~0
-defocus_strength          = [0.0,   1.5  ]   # was [0, 3]; PC is in-focus, 3.0 unphysical
-psf_sigma                 = [0.3,   1.5  ]   # was [0.1, 3]; trim diffraction-limited range
+# Pin with [X, X] to remove a param from DE entirely.
+bg_base_brightness        = [0.2,   0.7  ]
+bg_blur_sigma             = [1.0,   2.2  ]
+bg_gradient_strength      = [0.0,   0.025]
+brightness_noise_strength = [0.03,  0.1  ]
+gaussian_sigma            = [0.001, 0.01 ]
+halo_blur_sigma           = [0.4,   2.0  ]
+halo_inner_width          = [0.5,   1.5  ]
+peak_signal               = [4000,  10000]
+texture_scale             = [0.5,   4.0  ]
+texture_strength          = [0.0,   0.05 ]
+psf_sigma                 = [0.4,   2.0  ]
+defocus_strength          = [0.0,   0.5  ]
+vignette_strength         = [0.0,   1.0  ]
 
 [screening]
 num_trajectories = 40
