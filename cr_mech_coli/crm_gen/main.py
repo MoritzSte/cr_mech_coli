@@ -305,7 +305,6 @@ _REGISTRY_TO_SECTION_KEY = {
     "bac_halo_intensity": ("synthetic", "bac_halo_intensity"),
     "bg_noise_scale": ("synthetic", "bg_noise_scale"),
     "psf_sigma": ("synthetic", "psf_sigma"),
-    "psf_size": ("synthetic", "psf_size"),
     "peak_signal": ("synthetic", "peak_signal"),
     "gaussian_sigma": ("synthetic", "gaussian_sigma"),
     "absorption_coeff": ("synthetic", "absorption_coeff"),
@@ -383,8 +382,9 @@ def _run_clone(args, config):
     if seed is None:
         seed = synthetic_config.get("seed", None)
 
-    # Registry-merged params (covers all 24 imaging knobs, including the 9
-    # newer ones — absorption/defocus/vignette/edge_fringe/psf_size/etc.).
+    # Registry-merged params (covers every imaging knob, including the newer
+    # ones — absorption/defocus/vignette/edge_fringe/etc.).  The PSF kernel
+    # size is derived from psf_sigma inside create_gaussian_psf — not a param.
     # Orthogonal non-registry settings (mode toggles, fade type, range tuples)
     # are still passed as individual kwargs.
     params = _build_registry_params(
