@@ -66,7 +66,6 @@ def apply_synthetic_effects(
     # Extended registry params (previously hardcoded in the params-less branch).
     # Each has a zero-value or parent-gated disable; see comments in scene body.
     dark_spot_intensity: float = 0.0,
-    psf_size: int = 7,
     absorption_coeff: float = 0.0,
     cell_optical_thickness: float = 3.0,
     defocus_strength: float = 0.0,
@@ -163,7 +162,6 @@ def apply_synthetic_effects(
         halo_outer_width = _p["halo_outer_width"]
         halo_blur_sigma = _p["halo_blur_sigma"]
         brightness_noise_strength = _p["brightness_noise_strength"]
-        psf_size = int(_p["psf_size"])
         absorption_coeff = _p["absorption_coeff"]
         cell_optical_thickness = _p["cell_optical_thickness"]
         defocus_strength = _p["defocus_strength"]
@@ -296,7 +294,6 @@ def apply_synthetic_effects(
             synthetic_image,
             defocus_strength=defocus_strength,
             defocus_scale=defocus_scale,
-            base_psf_sigma=psf_sigma,
             seed=seed,
         )
 
@@ -305,7 +302,6 @@ def apply_synthetic_effects(
         synthetic_image = filters.apply_psf_blur(
             synthetic_image,
             psf_sigma=psf_sigma,
-            psf_size=psf_size,
         )
 
     # 9. Vignetting (after optics, before sensor noise)
