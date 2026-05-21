@@ -157,14 +157,6 @@ PARAMETER_REGISTRY: Dict[str, ParameterDef] = {
         bounds=(0.1, 3.0),
         default=1.0,
     ),
-    "psf_size": ParameterDef(
-        name="psf_size",
-        group="psf",
-        description="PSF kernel size (odd integer)",
-        bounds=(5, 21),
-        default=7,
-        dtype="int_odd",
-    ),
     # ── Poisson noise ─────────────────────────────────────────────────────
     "peak_signal": ParameterDef(
         name="peak_signal",
