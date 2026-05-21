@@ -15,23 +15,25 @@ from scipy.ndimage import gaussian_filter, convolve, distance_transform_edt, zoo
 from typing import Tuple, Optional
 
 
-def create_gaussian_psf(size: int = 7, sigma: float = 1.0) -> np.ndarray:
+def create_gaussian_psf(sigma: float = 1.0, truncate: float = 4.0) -> np.ndarray:
     """
     Create a 2D Gaussian Point Spread Function kernel.
 
     The PSF models the optical blur caused by the microscope's optical system,
-    including diffraction and aberrations.
+    including diffraction and aberrations. The kernel size is derived from
+    ``sigma`` (radius = ``truncate`` * sigma) so the Gaussian tail is never
+    truncated.
 
     Args:
-        size (int): Size of the PSF kernel (size x size). Should be odd.
         sigma (float): Standard deviation of the Gaussian PSF in pixels.
+        truncate (float): Kernel radius in units of sigma (scipy's default 4.0).
 
     Returns:
         np.ndarray: 2D normalized PSF kernel that sums to 1.
     """
-    # Ensure odd size
-    if size % 2 == 0:
-        size += 1
+    # Kernel size derived from sigma so the Gaussian tail is not cut off
+    # (always odd).
+    size = 2 * int(np.ceil(truncate * max(sigma, 1e-10))) + 1
 
     # Guard against zero or very small sigma (return identity-like kernel)
     if sigma <= 1e-10:
@@ -52,23 +54,23 @@ def create_gaussian_psf(size: int = 7, sigma: float = 1.0) -> np.ndarray:
     return psf
 
 
-def create_airy_psf(size: int = 15, radius: float = 3.0) -> np.ndarray:
+def create_airy_psf(radius: float = 3.0) -> np.ndarray:
     """
     Create a 2D Airy disk Point Spread Function (more physically accurate).
 
     The Airy pattern is the diffraction pattern from a circular aperture,
-    which is more accurate for microscope optics than a Gaussian.
+    which is more accurate for microscope optics than a Gaussian. The kernel
+    size is derived from ``radius`` so the main rings are not truncated.
 
     Args:
-        size (int): Size of the PSF kernel (size x size). Should be odd.
         radius (float): Radius parameter for the Airy disk (first zero crossing).
 
     Returns:
         np.ndarray: 2D normalized PSF kernel that sums to 1.
     """
-    # Ensure odd size
-    if size % 2 == 0:
-        size += 1
+    # Kernel size derived from radius so the Airy rings are not cut off
+    # (always odd).
+    size = 2 * int(np.ceil(3.0 * max(radius, 1e-6))) + 1
 
     # Create coordinate grid centered at 0
     center = size // 2
@@ -97,7 +99,6 @@ def apply_psf_blur(
     image: np.ndarray,
     psf_type: str = "gaussian",
     psf_sigma: float = 1.0,
-    psf_size: int = 7,
     airy_radius: float = 3.0,
 ) -> np.ndarray:
     """
@@ -113,9 +114,7 @@ def apply_psf_blur(
         psf_type (str): Type of PSF: 'gaussian' (fast, good approximation) or 'airy'
             (more accurate).
         psf_sigma (float): Sigma for Gaussian PSF (in pixels). Typical range: 0.5-2.0.
-            Higher values = more blur.
-        psf_size (int): Size of PSF kernel. Should be large enough to capture PSF extent.
-            Typical range: 5-15.
+            Higher values = more blur. The kernel size is derived from this.
         airy_radius (float): Radius parameter for Airy disk PSF (only used if
             psf_type='airy').
 
@@ -139,9 +138,9 @@ def apply_psf_blur(
 
     # Create PSF kernel
     if psf_type.lower() == "gaussian":
-        psf_kernel = create_gaussian_psf(size=psf_size, sigma=psf_sigma)
+        psf_kernel = create_gaussian_psf(sigma=psf_sigma)
     elif psf_type.lower() == "airy":
-        psf_kernel = create_airy_psf(size=psf_size, radius=airy_radius)
+        psf_kernel = create_airy_psf(radius=airy_radius)
     else:
         raise ValueError(f"Unknown PSF type: {psf_type}. Use 'gaussian' or 'airy'")
 
@@ -545,7 +544,6 @@ def apply_phase_contrast_pipeline(
     apply_psf: bool = True,
     psf_type: str = "gaussian",
     psf_sigma: float = 1.0,
-    psf_size: int = 7,
     # Noise parameters
     apply_poisson: bool = True,
     peak_signal: float = 1000.0,
@@ -577,7 +575,6 @@ def apply_phase_contrast_pipeline(
         apply_psf (bool): Whether to apply PSF blur.
         psf_type (str): PSF type: 'gaussian' or 'airy'.
         psf_sigma (float): PSF blur strength.
-        psf_size (int): PSF kernel size.
         apply_poisson (bool): Whether to add Poisson noise.
         peak_signal (float): Peak photon count for Poisson noise.
         apply_gaussian (bool): Whether to add Gaussian noise.
@@ -604,7 +601,7 @@ def apply_phase_contrast_pipeline(
     # Step 2: Apply PSF blur (optical diffraction)
     if apply_psf:
         result = apply_psf_blur(
-            result, psf_type=psf_type, psf_sigma=psf_sigma, psf_size=psf_size
+            result, psf_type=psf_type, psf_sigma=psf_sigma
         )
 
     # Step 3: Apply Poisson noise (photon shot noise)
@@ -626,7 +623,6 @@ def apply_microscope_effects(
     apply_psf: bool = True,
     psf_type: str = "gaussian",
     psf_sigma: float = 1.0,
-    psf_size: int = 7,
     airy_radius: float = 3.0,
     blur_bacteria_more: bool = False,
     bacteria_blur_factor: float = 1.5,
@@ -654,7 +650,6 @@ def apply_microscope_effects(
         apply_psf (bool): Whether to apply PSF blur.
         psf_type (str): Type of PSF: 'gaussian' or 'airy'.
         psf_sigma (float): Sigma for Gaussian PSF blur (in pixels).
-        psf_size (int): Size of PSF kernel.
         airy_radius (float): Radius for Airy disk PSF.
         blur_bacteria_more (bool): Apply stronger blur to bacteria to smooth
             sharp edges.
@@ -688,7 +683,6 @@ def apply_microscope_effects(
                 result,
                 psf_type=psf_type,
                 psf_sigma=psf_sigma,
-                psf_size=psf_size,
                 airy_radius=airy_radius,
             )
 
@@ -697,7 +691,6 @@ def apply_microscope_effects(
                 result,
                 psf_type=psf_type,
                 psf_sigma=psf_sigma * bacteria_blur_factor,
-                psf_size=max(psf_size, int(psf_size * bacteria_blur_factor)),
                 airy_radius=airy_radius * bacteria_blur_factor,
             )
 
@@ -716,7 +709,6 @@ def apply_microscope_effects(
                 result,
                 psf_type=psf_type,
                 psf_sigma=psf_sigma,
-                psf_size=psf_size,
                 airy_radius=airy_radius,
             )
 
@@ -807,27 +799,27 @@ def apply_defocus_blur(
     image: np.ndarray,
     defocus_strength: float = 1.0,
     defocus_scale: int = 10,
-    base_psf_sigma: float = 0.5,
     num_bins: int = 8,
     seed: Optional[int] = None,
 ) -> np.ndarray:
     """
-    Apply spatially varying Gaussian blur to simulate depth-of-field defocus.
+    Apply the *additional* spatially varying depth-of-field blur.
 
     Generates a smooth z-offset field (Perlin-like multi-octave noise) and
-    blurs the image with a sigma that depends on the local z-offset. For
-    efficiency, the sigma range is discretized into a small number of bins,
-    each bin is blurred separately, and the pre-blurred images are blended
-    per-pixel based on bin membership.
+    blurs the image with a sigma that depends on the local z-offset. This is
+    the *extra* defocus blur only — the in-focus base PSF is applied
+    separately by ``apply_psf_blur``; two successive Gaussian blurs compose in
+    quadrature, so the net blur is ``sqrt(psf_sigma**2 + defocus_sigma**2)``.
+    For efficiency, the sigma range is discretized into a small number of
+    bins, each bin is blurred separately, and the pre-blurred images are
+    blended per-pixel based on bin membership.
 
     Args:
         image (np.ndarray): Input image (grayscale or RGB).
-        defocus_strength (float): Maximum additional sigma added on top of
-            *base_psf_sigma*. 0.0 = no-op. Typical range: 0.5-2.5.
+        defocus_strength (float): Defocus sigma at the most out-of-focus
+            pixel. 0.0 = no-op. In-focus pixels get sigma 0 (identity).
         defocus_scale (int): Spatial scale of the z-variation field. Larger =
             smoother / lower-frequency variation.
-        base_psf_sigma (float): In-focus PSF sigma — minimum blur applied to
-            every pixel.
         num_bins (int): Number of discrete sigma levels used for the
             spatially-varying blur approximation.
         seed (int): Random seed for the z-field.
@@ -861,8 +853,9 @@ def apply_defocus_blur(
     if z_max > 0:
         z_field = z_field / z_max
 
-    # Sigma per pixel
-    sigmas = base_psf_sigma + defocus_strength * z_field
+    # Sigma per pixel — the additional defocus blur only; the in-focus base
+    # PSF is applied separately by apply_psf_blur.
+    sigmas = defocus_strength * z_field
 
     # Discretize sigmas into num_bins values between min and max
     s_min, s_max = sigmas.min(), sigmas.max()
