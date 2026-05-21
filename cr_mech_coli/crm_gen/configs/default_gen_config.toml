@@ -15,11 +15,11 @@
 output_dir = "./outputs"
 n_simulations = 1                       # Number of simulations with different randomized parameters
 n_frames = 20                           # Number of frames (saved iterations) per simulation
-image_size = [1024, 1024]               # [width, height] in pixels
+image_size = [512, 512]                 # [width, height] in pixels
 seed = 0                                # Random seed (0 = random)
 n_workers = 0                           # Number of parallel workers (0 = all CPUs)
 skip_synthetic = false                  # Only run simulation, skip synthetic image generation
-delete_generated = false                # Delete raw generated images after creating synthetic ones
+delete_generated = true                 # Delete raw generated images after creating synthetic ones
 
 [simulation]
 # All physics params as [min, max]. min == max means exact value.
@@ -27,12 +27,13 @@ delete_generated = false                # Delete raw generated images after crea
 
 # Timing parameters
 t_max = [100.0, 100.0]                  # Total simulation time in minutes
-dt = [0.1, 0.1]                         # Time step in minutes
+dt = [0.02, 0.02]                       # Time step in minutes
 
 # Initial conditions
 n_bacteria = [8, 8]                     # Range for initial bacteria count
-border_distance = 400.0                 # Minimum distance from border for initial positions (pixels)
+border_distance = 40.0                  # Minimum distance from border for initial positions (pixels)
 n_vertices = 8                          # Number of vertices per bacterium
+domain_height = 0.5                     # Slab thickness in z (micrometers); default 2.5. Increase for long rods.
 
 # Growth parameters
 growth_rate = [0.01, 0.01]              # Base growth rate (1/min)
@@ -47,9 +48,10 @@ damping = [1.0, 1.0]                    # Damping constant (1/min)
 
 # Cell-cell interaction parameters (Morse potential)
 interaction_strength = [0.1, 0.1]       # Interaction strength (um^2/min^2)
+radius = 6.0                            # Rod half-thickness in micrometers (default 3.0)
 
 # Environment parameters
-gel_pressure = [0.0, 0.0]               # Pressure from gel medium
+gel_pressure = [0.1, 0.1]               # Pressure from gel medium
 surface_friction = [0.0, 0.0]           # Surface friction coefficient
 
 [rendering]
@@ -73,7 +75,6 @@ bg_base_brightness    = 0.2845          # Base brightness for background (0.0-1.
 bg_gradient_strength  = 0.0185          # Illumination gradient intensity (0.0-1.0); set to 0 to disable
 bg_noise_scale        = 22              # Background illumination noise scale (1-25); gated by no flag
 psf_sigma             = 2.49            # PSF blur sigma (pixels); gated by apply_psf
-psf_size              = 7               # PSF kernel size (pixels); gated by apply_psf
 peak_signal           = 8964.939        # Peak photon count for Poisson noise; gated by apply_poisson
 gaussian_sigma        = 0.003           # Gaussian readout noise sigma; gated by apply_gaussian
 defocus_strength      = 0.0             # Spatially-varying defocus (0.0-3.0); set to 0 to disable
@@ -100,7 +101,7 @@ dark_rim_width         = 1.5            # Rim fade width in pixels; ignored when
 
 [background]
 # Background generation parameters
-consistent             = true           # Same background across all frames (for video); also freezes jitter draws per simulation
+consistent             = false          # Same background across all frames (for video); also freezes jitter draws per simulation
 dark_spot_size_range   = [2, 5]         # Range of dark spot sigma values
 num_dark_spots_range   = [0, 5]         # Range for number of dark spots
 num_dark_spots_max     = 5              # Registry-style upper bound; when set, overrides num_dark_spots_range[1]. Set to 0 to disable dark spots.
@@ -119,7 +120,7 @@ fade_type   = "exponential"             # Fade type: "linear", "exponential", or
 
 [brightness]
 # Bacteria brightness mode
-mode             = "original"           # "age" (compute from cell age) or "original" (match from reference)
+mode             = "age"                # "age" (compute from cell age) or "original" (match from reference)
 brightness_range = [0.5, 0.28]          # [young, old] brightness for age mode
 noise_strength   = 0.28                 # Perlin-like noise strength for brightness variation (0.0-1.0); set to 0 to disable
 
