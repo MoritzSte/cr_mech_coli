@@ -481,7 +481,6 @@ def process_frame_for_synthetic(args):
 
     # Extended optical params (registry-mapped, zero-value disable except for
     # parent-gated children like cell_optical_thickness/defocus_scale).
-    psf_size = int(synthetic_params.get('psf_size', 7))
     absorption_coeff = synthetic_params.get('absorption_coeff', 0.0)
     cell_optical_thickness = synthetic_params.get('cell_optical_thickness', 3.0)
     defocus_strength = synthetic_params.get('defocus_strength', 0.0)
@@ -531,7 +530,6 @@ def process_frame_for_synthetic(args):
         bg_seed=bg_seed,
         # Extended registry params
         dark_spot_intensity=dark_spot_intensity,
-        psf_size=psf_size,
         absorption_coeff=absorption_coeff,
         cell_optical_thickness=cell_optical_thickness,
         defocus_strength=defocus_strength,
