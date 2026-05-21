@@ -154,7 +154,7 @@ PARAMETER_REGISTRY: Dict[str, ParameterDef] = {
         name="psf_sigma",
         group="psf",
         description="Point Spread Function blur standard deviation (pixels)",
-        bounds=(0.1, 3.0),
+        bounds=(0.6, 1.8),
         default=1.0,
     ),
     # ── Poisson noise ─────────────────────────────────────────────────────
@@ -205,7 +205,7 @@ PARAMETER_REGISTRY: Dict[str, ParameterDef] = {
         name="defocus_strength",
         group="defocus",
         description="Maximum additional blur sigma from defocus",
-        bounds=(0.0, 3.0),
+        bounds=(0.0, 0.3),
         default=0.0,
         off_value=0.0,
     ),
